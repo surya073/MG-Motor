@@ -7,6 +7,7 @@ const { guardSweep } = require('./sweepOverlapGuard');
 const { withMappingCache } = require('./mappingRunCache');
 const stats = require('../dashboardStatsService');
 const { toCatalystDateTime } = require('../../utils/dateFormat');
+const { isPauseAuthFailedRetriesEnabled } = require('../../config/env');
 const { ROTATION_BUCKET_MS, tailWindow, countFrom } = require('./sweepWindow');
 
 const LEAD_INTEGRATIONS_TABLE = 'lead_integrations';
@@ -145,6 +146,7 @@ async function runOutboundRetrySweepInternal(catalystApp, options) {
     skippedNotDue: 0,
     skippedNoIntegrationOrLead: 0,
     skippedPushPaused: 0,
+    skippedAuthPaused: 0,
     errored: 0,
     heldReasons: {},
   };
@@ -198,6 +200,18 @@ async function runOutboundRetrySweepInternal(catalystApp, options) {
       // switching Push ON again sends the held leads on the next run.
       if (integration && crmIntegrationService.isDealerPushPaused(integration) && !mapping.external_crm_lead_id) {
         results.skippedPushPaused += 1;
+        return;
+      }
+
+      // A lead that failed on AUTHENTICATION_FAILED fails the same way until the dealer's
+      // credentials change, so passing it over saves the lead read and the whole send path
+      // on every run (13 leads were retried every 15 minutes, some 350+ times). Catalyst
+      // system timestamps share one format and compare as strings. Saving the integration
+      // moves its MODIFIEDTIME past the lead's last failure, and the lead is retried again.
+      if (integration && isPauseAuthFailedRetriesEnabled() && mapping.last_error === 'AUTHENTICATION_FAILED'
+        && integration.MODIFIEDTIME && mapping.MODIFIEDTIME
+        && String(integration.MODIFIEDTIME) <= String(mapping.MODIFIEDTIME)) {
+        results.skippedAuthPaused += 1;
         return;
       }
 

@@ -176,3 +176,52 @@ test('outbound: a lead already in the dealer CRM keeps being retried while Push 
   assert.equal(result.attempted, 1);
   assert.equal(send.mock.callCount(), 1);
 });
+
+// ---------------------------------------------------------------- outbound: AUTHENTICATION_FAILED pause
+
+function authFailedDb({ integrationModified, leadModified = '2026-11-06 15:50:24:121', lastError = 'AUTHENTICATION_FAILED' }) {
+  return createInMemoryZcql({
+    dealer_integrations: [{ dealer_code: 'AU100', crm_type: 'DEALER_STUDIO', status: 'CONNECTED', outbound_enabled: true, push_enabled: true, MODIFIEDTIME: integrationModified }],
+    lead_integrations: [
+      { integration_id: '1000', zoho_lead_id: 'ZL1', dealer_code: 'AU100', external_crm_lead_id: '', sync_status: 'FAILED_CRITICAL', last_error: lastError, MODIFIEDTIME: leadModified },
+    ],
+    leads: [{ crm_record_id: 'ZL1', dealer_code: 'AU100', sync_status: 'SYNCED', lead_status: 'Not Contacted' }],
+    integration_logs: [],
+  });
+}
+
+test('outbound: a lead that failed authentication is not retried while the integration is unchanged', async (t) => {
+  const db = authFailedDb({ integrationModified: '2026-11-01 10:00:00:000' });
+  const send = t.mock.method(crm, 'syncLeadToExternalCrm', async () => ({ ok: true }));
+  const { result } = await outboundSweep(db);
+  assert.equal(result.skippedAuthPaused, 1);
+  assert.equal(result.attempted, 0);
+  assert.equal(send.mock.callCount(), 0);
+});
+
+test('outbound: saving the integration after the failure retries the lead again', async (t) => {
+  const db = authFailedDb({ integrationModified: '2026-11-10 10:00:00:000' });
+  const send = t.mock.method(crm, 'syncLeadToExternalCrm', async () => ({ ok: true }));
+  const { result } = await outboundSweep(db);
+  assert.equal(result.skippedAuthPaused, 0);
+  assert.equal(result.recovered, 1);
+  assert.equal(send.mock.callCount(), 1);
+});
+
+test('outbound: other failure reasons are still retried', async (t) => {
+  const db = authFailedDb({ integrationModified: '2026-11-01 10:00:00:000', lastError: 'EXTERNAL_CRM_ERROR' });
+  const send = t.mock.method(crm, 'syncLeadToExternalCrm', async () => ({ ok: true }));
+  const { result } = await outboundSweep(db);
+  assert.equal(result.skippedAuthPaused, 0);
+  assert.equal(send.mock.callCount(), 1);
+});
+
+test('outbound: PAUSE_AUTH_FAILED_RETRIES=false restores retrying authentication failures', async (t) => {
+  process.env.PAUSE_AUTH_FAILED_RETRIES = 'false';
+  t.after(() => { delete process.env.PAUSE_AUTH_FAILED_RETRIES; });
+  const db = authFailedDb({ integrationModified: '2026-11-01 10:00:00:000' });
+  const send = t.mock.method(crm, 'syncLeadToExternalCrm', async () => ({ ok: true }));
+  const { result } = await outboundSweep(db);
+  assert.equal(result.skippedAuthPaused, 0);
+  assert.equal(send.mock.callCount(), 1);
+});

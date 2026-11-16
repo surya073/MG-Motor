@@ -385,6 +385,18 @@ function isSkipEmptyWebhookSyncLogEnabled() {
   return String(process.env.SKIP_EMPTY_WEBHOOK_SYNC_LOG ?? '').trim().toLowerCase() !== 'false';
 }
 
+/**
+ * PAUSE_AUTH_FAILED_RETRIES: the outbound retry sweep does not re-send a lead whose last
+ * failure was AUTHENTICATION_FAILED while its dealer integration has not been edited since
+ * that failure (retrying with the same bad credentials can only fail again). Saving the
+ * integration, or the daily webhook renewal that touches it, lets the lead be retried once
+ * more. Unset means on; "false" restores the old retry-every-interval behaviour. Manual
+ * retries from the admin page are not affected.
+ */
+function isPauseAuthFailedRetriesEnabled() {
+  return String(process.env.PAUSE_AUTH_FAILED_RETRIES ?? '').trim().toLowerCase() !== 'false';
+}
+
 /** LEAD_FACETS_CACHE_SECONDS: how long the Lead Exchange filter data is reused (default 60, 0 off). */
 function getLeadFacetsCacheSeconds() {
   const text = String(process.env.LEAD_FACETS_CACHE_SECONDS ?? '').trim();
@@ -503,6 +515,7 @@ module.exports = {
   getDealerListCacheSeconds,
   getLeadFacetsCacheSeconds,
   isSkipEmptyWebhookSyncLogEnabled,
+  isPauseAuthFailedRetriesEnabled,
   getInboundReplayIdleSkipMinutes,
   getFusionInboundEditFields,
   isUsageLogEnabled,
