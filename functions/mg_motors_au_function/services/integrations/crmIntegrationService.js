@@ -11,6 +11,8 @@ const integrationAlertService = require('./integrationAlertService');
 const { notifyAdmins } = require('../notificationService');
 const { buildLeadChangeNotification } = require('../leadChangeNotificationService');
 const oemCrmService = require('../zohoCrmService');
+const { oemReferenceFields } = require('./oemReferenceFields');
+const { parseProjectDateTime, parseUtcDateTime: parseUtcDate } = require('../../utils/projectTime');
 const outboundSyncClaimService = require('./outboundSyncClaimService');
 const dashboardStats = require('../dashboardStatsService');
 const { withCrmApiLimit } = require('./crmApiConcurrencyLimiter');
@@ -757,33 +759,26 @@ function integrationUnavailable(integration, direction) {
 /**
  * When the lead was created at MG, as a Date, or null when unknown.
  * `assigned_date` holds the CRM's real Created_Time, stored in UTC. A row that has
- * none falls back to the row's own CREATEDTIME (project time, Asia/Kolkata,
+ * none falls back to the row's own CREATEDTIME (project time, in PROJECT_TIMEZONE,
  * with a trailing :ms).
  */
 function leadCreatedAt(leadRow) {
-  const assigned = String(leadRow?.assigned_date || '').trim();
-  if (assigned) {
-    const parsed = new Date(`${assigned.replace(' ', 'T').slice(0, 19)}Z`);
-    if (!Number.isNaN(parsed.getTime())) return parsed;
-  }
-  const rowCreated = String(leadRow?.CREATEDTIME || '').trim();
-  if (rowCreated) {
-    const parsed = new Date(`${rowCreated.replace(' ', 'T').slice(0, 19)}+05:30`);
-    if (!Number.isNaN(parsed.getTime())) return parsed;
-  }
-  return null;
+  const assigned = parseUtcDate(leadRow?.assigned_date);
+  if (assigned) return assigned;
+  return parseProjectDateTime(leadRow?.CREATEDTIME);
 }
 
 /**
- * When this dealer was connected, as a Date: the integration row's own
- * CREATEDTIME (project time, Asia/Kolkata, with a trailing :ms), or null if
- * unreadable.
+ * When this dealer was connected, as a Date, or null if unknown.
+ * `connected_at` (UTC, written by the code) wins when present: it survives a copy of
+ * the data to another project, where the row's CREATEDTIME becomes the copy time.
+ * Otherwise the row's own CREATEDTIME (project time, in PROJECT_TIMEZONE, with a
+ * trailing :ms).
  */
 function dealerConnectedAt(integration) {
-  const created = String(integration?.CREATEDTIME || '').trim();
-  if (!created) return null;
-  const parsed = new Date(`${created.replace(' ', 'T').slice(0, 19)}+05:30`);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+  const explicit = parseUtcDate(integration?.connected_at);
+  if (explicit) return explicit;
+  return parseProjectDateTime(integration?.CREATEDTIME);
 }
 
 /**
@@ -1148,9 +1143,17 @@ function connectedCrmLabel(integration) {
   return CONNECTED_CRM_LABELS[integration?.crm_type] || String(integration?.crm_name || integration?.crm_type || '').trim();
 }
 
-function deliveryAcknowledgementFields(integration) {
+// `references` carries the delivery references OEM keeps for the lead
+// (Dealer_CRM_ID, Middleware_ID — see oemReferenceFields.js). Written in the same
+// OEM update as the acknowledgement, so Happy 1 completes only once OEM holds them.
+function deliveryAcknowledgementFields(integration, references = {}) {
   const connectedCrm = connectedCrmLabel(integration);
-  return { Lead_Status: 'Not Contacted', Lead_Exchanged: true, ...(connectedCrm ? { Connected_CRM: connectedCrm } : {}) };
+  return {
+    Lead_Status: 'Not Contacted',
+    Lead_Exchanged: true,
+    ...(connectedCrm ? { Connected_CRM: connectedCrm } : {}),
+    ...oemReferenceFields(references),
+  };
 }
 
 // MG's date fields are plain dates; the dealers and MG operate on Australian time.
@@ -1223,7 +1226,10 @@ async function linkUnresolvedLead(catalystApp, integration, leadRow, externalLea
 
   let acknowledged = true;
   try {
-    await oemCrmService.updateOemLead(zohoLeadId, deliveryAcknowledgementFields(integration));
+    await oemCrmService.updateOemLead(
+      zohoLeadId,
+      deliveryAcknowledgementFields(integration, { dealerCrmId: externalLeadId, middlewareId: leadRow.ROWID })
+    );
   } catch (err) {
     acknowledged = false;
     logger.error('crmIntegrationService', `Acknowledgement write-back failed for linked lead ${zohoLeadId}`, err);
@@ -1440,7 +1446,10 @@ async function attemptExternalCrmSync(catalystApp, integration, leadRow, zohoLea
       operation === 'CREATE_LEAD' || existingMapping?.last_error === 'ZOHO_ACK_UPDATE_FAILED';
     if (needsAcknowledgementWriteback) {
       try {
-        await oemCrmService.updateOemLead(zohoLeadId, deliveryAcknowledgementFields(integration));
+        await oemCrmService.updateOemLead(
+          zohoLeadId,
+          deliveryAcknowledgementFields(integration, { dealerCrmId: externalLeadId, middlewareId: leadRow.ROWID })
+        );
         if (leadRow.ROWID) {
           await catalystApp.datastore().table(LEADS_TABLE).updateRow({
             ROWID: leadRow.ROWID,

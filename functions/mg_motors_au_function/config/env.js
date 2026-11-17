@@ -483,7 +483,27 @@ function isFusionSdNewLeadsOnly() {
   return !['false', 'off', 'no', '0'].includes(String(process.env.FUSION_SD_NEW_LEADS_ONLY || '').trim().toLowerCase());
 }
 
+/**
+ * PROJECT_TIMEZONE: the IANA timezone the Catalyst project (Console > Settings >
+ * General) displays its system columns in (CREATEDTIME / MODIFIEDTIME). The code
+ * reads those as wall-clock strings, so it must know the zone. Defaults to
+ * Asia/Kolkata (the original project); the MG project runs on Australia/Sydney.
+ * An unknown zone name falls back to the default rather than breaking every date.
+ */
+const DEFAULT_PROJECT_TIMEZONE = 'Asia/Kolkata';
+function getProjectTimezone() {
+  const raw = String(process.env.PROJECT_TIMEZONE || '').trim();
+  if (!raw) return DEFAULT_PROJECT_TIMEZONE;
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone: raw });
+    return raw;
+  } catch (err) {
+    return DEFAULT_PROJECT_TIMEZONE;
+  }
+}
+
 module.exports = {
+  getProjectTimezone,
   isDealerStudioNewLeadsOnly,
   isFusionSdNewLeadsOnly,
   getZohoConfig,
