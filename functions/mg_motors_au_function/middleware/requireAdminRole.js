@@ -2,8 +2,8 @@
 
   const logger = require('../utils/logger');
 
-  const SUPER_ADMIN_ROLE_ID = '37148000000359008';
-  const ADMIN_ROLE_ID = '37148000000430003';
+  const SUPER_ADMIN_ROLE_ID = '818000000022006';
+  const ADMIN_ROLE_ID = '818000000018018';
 
   const ALLOWED_ROLE_IDS = [SUPER_ADMIN_ROLE_ID, ADMIN_ROLE_ID];
 

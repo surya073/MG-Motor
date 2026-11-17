@@ -28,7 +28,7 @@ function toZohoDateTime(date) {
 function buildNotifyUrl() {
   const baseUrl = String(
     process.env.PUBLIC_FUNCTION_BASE_URL ||
-    'https://mg-motors-au-60069659585.development.catalystserverless.in/server/mg_motors_au_function'
+    'https://mg-motors-au-7007717417.development.catalystserverless.com.au/server/mg_motors_au_function'
   ).replace(/\/$/, '');
   return `${baseUrl}/webhooks/crm-notify`;
 }
@@ -118,7 +118,7 @@ const { getAccessTokenForDealerZoho } = require('./integrations/adapters/zohoCrm
 function buildDealerNotifyUrl(dealerCode) {
   const baseUrl = String(
     process.env.PUBLIC_FUNCTION_BASE_URL ||
-    'https://mg-motors-au-60069659585.development.catalystserverless.in/server/mg_motors_au_function'
+    'https://mg-motors-au-7007717417.development.catalystserverless.com.au/server/mg_motors_au_function'
   ).replace(/\/$/, '');
   return `${baseUrl}/webhooks/dealers/${encodeURIComponent(dealerCode)}`;
 }

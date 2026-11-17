@@ -103,12 +103,12 @@ test('dealer HTTP route ignores a client-supplied dealer code and requires an au
 
 test('admin HTTP suggestions retain explicit role authorization', () => {
   const guard = adminRoutes.stack.find((entry) => entry.route?.path === '/admin/search-suggestions').route.stack[0].handle;
-  for (const role_id of ['37148000000359008', '37148000000430003', '37148000000899033', '37148000000430005']) {
+  for (const role_id of ['818000000022006', '818000000018018', '818000000018014', '818000000018020']) {
     let passed = false;
     const res = { locals: { currentUser: { role_details: { role_id } } },
       status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
     guard({}, res, () => { passed = true; });
-    assert.equal(passed, role_id !== '37148000000430005');
+    assert.equal(passed, role_id !== '818000000018020');
     if (!passed) assert.equal(res.statusCode, 403);
   }
 });

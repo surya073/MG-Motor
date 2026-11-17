@@ -37,9 +37,9 @@ async function removeAdminUser(rowId) {
 }
 
 export const ADMIN_ROLE_OPTIONS = [
-  { value: "37148000000359008", label: "Super Admin" },
-  { value: "37148000000430003", label: "Admin" },
-  { value: "37148000000899033", label: "View User" },
+  { value: "818000000022006", label: "Super Admin" },
+  { value: "818000000018018", label: "Admin" },
+  { value: "818000000018014", label: "View User" },
 ];
 
 export const adminUserService = {

@@ -19,7 +19,7 @@ const { SUPER_ADMIN_ROLE_ID, ADMIN_ROLE_ID } = require('./requireAdminRole');
  * redefining them, so there is a single source of truth and no risk of
  * the IDs drifting apart.
  */
-const VIEW_USER_ROLE_ID = '37148000000899033';
+const VIEW_USER_ROLE_ID = '818000000018014';
 
 const ALLOWED_ROLE_IDS = [SUPER_ADMIN_ROLE_ID, ADMIN_ROLE_ID, VIEW_USER_ROLE_ID];
 

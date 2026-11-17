@@ -10,17 +10,17 @@
   "projects": [
     {
       "idx": 1,
-      "id": "37148000000359003",
+      "id": "818000000022001",
       "name": "MG-motors-au",
       "domain": {
-        "id": "50043936167",
-        "name": "mg-motors-au-60069659585.development"
+        "id": "8006657607",
+        "name": "mg-motors-au-7007717417.development"
       },
-      "timezone": "Asia/Kolkata",
+      "timezone": "Australia/Sydney",
       "env": [
         {
           "idx": 1,
-          "id": "60069659585",
+          "id": "7007717417",
           "name": "Development",
           "type": 3
         }

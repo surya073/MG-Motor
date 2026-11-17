@@ -8,6 +8,7 @@ const outboundRetryScheduler = require('../services/integrations/outboundRetrySc
 const inboundReplayScheduler = require('../services/integrations/inboundReplayScheduler');
 const slaMonitorService = require('../services/integrations/slaMonitorService');
 const dealerReconciliationService = require('../services/integrations/dealerReconciliationService');
+const { backfillOemReferences } = require('../services/integrations/oemReferenceBackfillService');
 const dailyErrorReportService = require('../services/integrations/dailyErrorReportService');
 const webhookEventRetention = require('../services/integrations/webhookEventRetention');
 const logger = require('../utils/logger');
@@ -133,6 +134,37 @@ router.post('/cron/sync-modified-leads', async (req, res) => {
     res.status(200).json({ success: true, ...result });
   } catch (err) {
     logger.error('cronRoutes', 'Cron sync-modified-leads failed', err);
+    res.status(502).json({ success: false, error: err.message });
+  }
+});
+
+// One-off, idempotent backfill of the OEM reference fields (Dealer_CRM_ID,
+// Middleware_ID) for leads delivered before those fields existed. Writes ONLY
+// those two OEM fields: it never pushes to a dealer or changes a status. Call
+// it repeatedly with the returned `nextAfterRowId` until `done` is true.
+// Body (all optional): { dealerCodes: ['406802', ...], afterRowId, limit, dryRun }.
+router.post('/cron/backfill-oem-references', async (req, res) => {
+  const providedSecret = req.headers['x-cron-secret'];
+  if (!providedSecret || providedSecret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+
+  try {
+    const catalystApp = usageContext.initialize(catalyst, req);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const result = await backfillOemReferences(catalystApp, {
+      dealerCodes: body.dealerCodes,
+      afterRowId: body.afterRowId,
+      limit: body.limit,
+      dryRun: body.dryRun === true,
+      deadline: Date.now() + 20000,
+    });
+    logger.info('cronRoutes', 'OEM reference backfill page', {
+      scanned: result.scanned, updated: result.updated, failed: result.failed, dryRun: result.dryRun,
+    });
+    res.status(200).json({ success: true, ...result });
+  } catch (err) {
+    logger.error('cronRoutes', 'OEM reference backfill failed', err);
     res.status(502).json({ success: false, error: err.message });
   }
 });
