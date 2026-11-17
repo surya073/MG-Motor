@@ -13,9 +13,9 @@
  *   Middleware_ID  - this middleware's own identifier for the lead: the
  *                    Catalyst Data Store ROWID of the leads row.
  *
- * Both are written in the same OEM update as the delivery acknowledgement
- * (see crmIntegrationService.deliveryAcknowledgementFields) so that Happy 1
- * is complete only once OEM holds them, and by the one-off backfill
+ * Both are written in a separate, best-effort OEM update after the delivery
+ * acknowledgement (see crmIntegrationService.stampOemDealerIds), so a rejected
+ * write never affects delivery, and by the one-off backfill
  * (oemReferenceBackfillService) for leads delivered before they existed.
  *
  * They are deliberately NOT part of any integration field mapping, so they

@@ -1143,17 +1143,28 @@ function connectedCrmLabel(integration) {
   return CONNECTED_CRM_LABELS[integration?.crm_type] || String(integration?.crm_name || integration?.crm_type || '').trim();
 }
 
-// `references` carries the delivery references OEM keeps for the lead
-// (Dealer_CRM_ID, Middleware_ID — see oemReferenceFields.js). Written in the same
-// OEM update as the acknowledgement, so Happy 1 completes only once OEM holds them.
-function deliveryAcknowledgementFields(integration, references = {}) {
+function deliveryAcknowledgementFields(integration) {
   const connectedCrm = connectedCrmLabel(integration);
   return {
     Lead_Status: 'Not Contacted',
     Lead_Exchanged: true,
     ...(connectedCrm ? { Connected_CRM: connectedCrm } : {}),
-    ...oemReferenceFields(references),
   };
+}
+
+// MG's Leads module also holds the dealer's own lead id (Dealer_CRM_ID) and this
+// middleware's lead id (Middleware_ID, the ROWID of the lead in the leads table),
+// so MG staff can find the same lead on both sides (field names: oemReferenceFields.js).
+// Best effort and written apart from the acknowledgement: if MG's field names are
+// wrong or the write fails, delivery and the "Lead Exchanged" write-back still stand.
+async function stampOemDealerIds(zohoLeadId, externalLeadId, leadRowId) {
+  const fields = oemReferenceFields({ dealerCrmId: externalLeadId, middlewareId: leadRowId });
+  if (Object.keys(fields).length === 0) return;
+  try {
+    await oemCrmService.updateOemLead(zohoLeadId, fields);
+  } catch (err) {
+    logger.error('crmIntegrationService', `Could not write Dealer_CRM_ID / Middleware_ID to MG lead ${zohoLeadId}`, err);
+  }
 }
 
 // MG's date fields are plain dates; the dealers and MG operate on Australian time.
@@ -1226,10 +1237,8 @@ async function linkUnresolvedLead(catalystApp, integration, leadRow, externalLea
 
   let acknowledged = true;
   try {
-    await oemCrmService.updateOemLead(
-      zohoLeadId,
-      deliveryAcknowledgementFields(integration, { dealerCrmId: externalLeadId, middlewareId: leadRow.ROWID })
-    );
+    await oemCrmService.updateOemLead(zohoLeadId, deliveryAcknowledgementFields(integration));
+    await stampOemDealerIds(zohoLeadId, externalLeadId, leadRow.ROWID);
   } catch (err) {
     acknowledged = false;
     logger.error('crmIntegrationService', `Acknowledgement write-back failed for linked lead ${zohoLeadId}`, err);
@@ -1446,10 +1455,7 @@ async function attemptExternalCrmSync(catalystApp, integration, leadRow, zohoLea
       operation === 'CREATE_LEAD' || existingMapping?.last_error === 'ZOHO_ACK_UPDATE_FAILED';
     if (needsAcknowledgementWriteback) {
       try {
-        await oemCrmService.updateOemLead(
-          zohoLeadId,
-          deliveryAcknowledgementFields(integration, { dealerCrmId: externalLeadId, middlewareId: leadRow.ROWID })
-        );
+        await oemCrmService.updateOemLead(zohoLeadId, deliveryAcknowledgementFields(integration));
         if (leadRow.ROWID) {
           await catalystApp.datastore().table(LEADS_TABLE).updateRow({
             ROWID: leadRow.ROWID,
@@ -1461,6 +1467,7 @@ async function attemptExternalCrmSync(catalystApp, integration, leadRow, zohoLea
         ackErr.code = 'ZOHO_ACK_UPDATE_FAILED';
         throw ackErr;
       }
+      await stampOemDealerIds(zohoLeadId, externalLeadId, leadRow.ROWID);
     }
 
     await setLeadSyncState(catalystApp, leadRow, 'SYNCED');
@@ -2514,9 +2521,11 @@ function canReplayFromStoredEvents(integration) {
 
 const STORED_EVENTS_TO_SCAN = 10;
 
-// How long a Dealer Studio webhook waits for the lead's lock before it is held
-// (about 3.4 s in all, inside Dealer Studio's push timeout). A test may shorten it.
+// How long a Dealer Studio or Fusion SD webhook waits for the lead's lock before it
+// is held (about 3.4 s in all, inside Dealer Studio's push timeout). A test may
+// shorten it.
 let DEALER_STUDIO_CLAIM_RETRY_DELAYS_MS = [700, 1200, 1500];
+const CLAIM_WAIT_CRM_TYPES = new Set(['DEALER_STUDIO', 'FUSION_SD']);
 
 /**
  * Replays a held dealer update from the newest stored webhook event for that
@@ -2636,7 +2645,10 @@ async function processResolvedInboundLead(
   // that push still holds the lead's lock, and it neither retries nor can be
   // replayed from stored events. So wait out a busy lock for a few seconds
   // instead of holding the post, or a status change in that window is lost.
-  if (integration.crm_type === 'DEALER_STUDIO' && !replay) {
+  // Fusion SD gets the same wait (17 Nov 2026): one save in Fusion can post two
+  // webhooks in the same second, and the second lost the lock, so its status
+  // change was held and, without INBOUND_EVENT_STORE, never applied.
+  if (CLAIM_WAIT_CRM_TYPES.has(integration.crm_type) && !replay) {
     for (const waitMs of DEALER_STUDIO_CLAIM_RETRY_DELAYS_MS) {
       if (!(claimResult?.skipped && claimResult.reason === 'CONCURRENT_SYNC_IN_PROGRESS')) break;
       await new Promise((resolve) => setTimeout(resolve, waitMs));
@@ -2771,6 +2783,11 @@ function keepsPendingOutboundRetry(mapping) {
 const FUSION_UNAPPLIED_STATUSES = new Set(['won', 'delivered']);
 // MG's stored value for the Retail Order outcome (Enquiry_Outcome picklist).
 const FUSION_WON_OUTCOME = 'Purchase';
+// Fusion "Lost" sets MG's status to Lost Lead and its Enquiry Outcome to Lost, unless
+// the lead already has an order outcome (those are final and are never replaced).
+const FUSION_LOST_STATUS = 'Lost Lead';
+const FUSION_LOST_OUTCOME = 'Lost';
+const FUSION_FINAL_OUTCOMES = new Set(['purchase', 'retail order', 'on-sold', 'on-sold demo', 'fleet order', 'lost']);
 
 function hasProgressedBeyondWaiting(mgStatus) {
   const status = String(mgStatus ?? '').trim();
@@ -3026,6 +3043,22 @@ async function attemptInboundLeadUpdate(
     if (Object.keys(mappedUpdate).length === 0) {
       return { skipped: true, reason: 'FUSION_STATUS_KEPT_MG_STATUS' };
     }
+  }
+
+  // A Fusion "Lost" that really moves the lead to Lost Lead closes it, so MG's
+  // Enquiry Outcome becomes "Lost" too (Q29: Lost -> Lost; MG, 17 Nov 2026). An
+  // outcome the lead already holds as an order (Purchase, Fleet, On-Sold) is never
+  // replaced. Only when MG's lead is not already Lost, so an echo or a repeat of a
+  // Lost MG already holds stays a no-change (or a reason-only update).
+  if (
+    fusionV2 &&
+    isStatusSync &&
+    mappedUpdate.lead_status === FUSION_LOST_STATUS &&
+    mappedUpdate.enquiry_outcome === undefined &&
+    !['lost lead', 'lost'].includes(String(existingLeadRow.lead_status ?? '').trim().toLowerCase()) &&
+    !FUSION_FINAL_OUTCOMES.has(String(existingLeadRow.enquiry_outcome ?? '').trim().toLowerCase())
+  ) {
+    mappedUpdate.enquiry_outcome = FUSION_LOST_OUTCOME;
   }
 
   // Once Unhappy 10 has raised Unattended Alert, a repeated dealer
