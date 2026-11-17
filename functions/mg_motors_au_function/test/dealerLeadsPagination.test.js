@@ -241,7 +241,7 @@ async function call(t, { userId, method = 'GET', path, body }) {
     if (userId) res.locals.currentUser = {
       user_id: userId,
       email_id: `${userId}@example.com`,
-      role_details: { role_id: '37148000000430005' },
+      role_details: { role_id: '818000000018020' },
     };
     next();
   });

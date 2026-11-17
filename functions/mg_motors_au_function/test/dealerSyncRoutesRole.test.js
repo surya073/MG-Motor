@@ -22,7 +22,7 @@ leadSyncService.syncLeads = async () => { calls.syncLeads += 1; return { inserte
 
 const dealerSyncRoutes = require('../routes/dealerSyncRoutes');
 
-const VIEW_USER_ROLE_ID = '37148000000899033';
+const VIEW_USER_ROLE_ID = '818000000018014';
 const DEALER_ROLE_ID = '11111111111111111'; // any role outside the allowed ones
 
 async function request(t, { roleId, method, path }) {

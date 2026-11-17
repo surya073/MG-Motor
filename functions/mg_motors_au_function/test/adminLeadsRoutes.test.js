@@ -12,7 +12,7 @@ const adminDashboardRoutes = require('../routes/adminDashboardRoutes');
 // same role middleware production uses; only the signed-in user and the
 // datastore are faked.
 
-const VIEW_USER_ROLE_ID = '37148000000899033';
+const VIEW_USER_ROLE_ID = '818000000018014';
 const DEALER_ROLE_ID = '11111111111111111'; // any role outside the three allowed ones
 
 function lead(n) {

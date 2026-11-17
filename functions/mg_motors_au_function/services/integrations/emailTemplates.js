@@ -49,7 +49,7 @@ const TONES = {
 // Where the "Open Lead Exchange" button points. Set LEAD_EXCHANGE_APP_URL
 // per environment; the default is this project's Development client.
 const APP_URL = process.env.LEAD_EXCHANGE_APP_URL
-  || 'https://mg-motors-au-60069659585.development.catalystserverless.in/app/index.html#/lead-exchange';
+  || 'https://mg-motors-au-7007717417.development.catalystserverless.com.au/app/index.html#/lead-exchange';
 
 /** A hosted address for the logo, for senders that cannot attach it inline. */
 function logoUrlFor(appUrl = APP_URL) {

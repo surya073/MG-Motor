@@ -6,7 +6,7 @@ const { toCatalystDateTime } = require('../utils/dateFormat');
 const MAPPING_TABLE = 'dealer_user_mapping';
 
 // Dealer role ID, confirmed from Catalyst Console → Roles (Jul 29, 2026)
-const DEALER_ROLE_ID = '37148000000430005';
+const DEALER_ROLE_ID = '818000000018020';
 
 /**
  * dealerInviteService.js

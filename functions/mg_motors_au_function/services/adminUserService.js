@@ -10,8 +10,8 @@ const MAPPING_TABLE = 'admin_user_mapping';
 // Role IDs not used in access-control middleware, so not imported from
 // requireAdminRole — defined here purely to label existing Catalyst
 // accounts during the pre-invite check below.
-const APP_USER_ROLE_ID = '37148000000359009';  // App User (Default)
-const DEALER_ROLE_ID = '37148000000430005';    // Dealer
+const APP_USER_ROLE_ID = '818000000022007';  // App User (Default)
+const DEALER_ROLE_ID = '818000000018020';    // Dealer
 
 // Roles assignable from this screen: Super Admin can promote/demote
 // between these three, but never to App User or Dealer here — those are

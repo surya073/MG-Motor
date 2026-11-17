@@ -364,7 +364,7 @@ test('health: a malformed date is ignored rather than injected into the query', 
 
 // --- routes: role-based access ----------------------------------------------------
 
-const VIEW_USER_ROLE_ID = '37148000000899033';
+const VIEW_USER_ROLE_ID = '818000000018014';
 const DEALER_ROLE_ID = '11111111111111111';
 
 async function get(t, roleId, path) {
