@@ -1,6 +1,7 @@
 'use strict';
 
 const { TABLE } = require('./usageRollup');
+const { projectHourLabel } = require('../utils/projectTime');
 const { _test: { PRICE } } = require('./costKpiService');
 
 /**
@@ -15,10 +16,10 @@ const DEFAULT_HOURS = 24;
 const MAX_HOURS = 24 * 14;
 const PAGE = 300; // ZCQL's row cap per query
 const MAX_PAGES = 40;
-const IST_OFFSET_MS = 330 * 60 * 1000;
-
+// Hourly buckets are keyed in project time (PROJECT_TIMEZONE; see utils/projectTime.js),
+// the same label usageRollup.js writes.
 function hourKey(ms) {
-  return new Date(ms + IST_OFFSET_MS).toISOString().slice(0, 13).replace('T', ' ');
+  return projectHourLabel(ms);
 }
 
 function clampHours(value) {

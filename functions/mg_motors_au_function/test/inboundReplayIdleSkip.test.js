@@ -17,7 +17,9 @@ const crm = require('../services/integrations/crmIntegrationService');
 const replay = require('../services/integrations/inboundReplayScheduler');
 const usageContext = require('../services/usageContext');
 
-const systemTime = (ms) => new Date(ms + 330 * 60000).toISOString().slice(0, 19).replace('T', ' ') + ':000';
+// Catalyst stores CREATEDTIME / MODIFIEDTIME in the project timezone (PROJECT_TIMEZONE), with milliseconds.
+const { formatProjectDateTime } = require('../utils/projectTime');
+const systemTime = (ms) => `${formatProjectDateTime(ms)}:000`;
 const MAP_VERSION = '2026-01-01 00:00:00:000';
 const SEEN = ` | replay-map:${Buffer.from(JSON.stringify({ map: MAP_VERSION, resolved: '', retry: false })).toString('base64url')}`;
 

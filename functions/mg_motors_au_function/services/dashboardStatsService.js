@@ -22,6 +22,7 @@
  */
 
 const logger = require('../utils/logger');
+const { formatProjectDateTime } = require('../utils/projectTime');
 const { translateZcqlError } = require('../utils/zcqlErrors');
 
 const LEADS_TABLE = 'leads';
@@ -332,13 +333,10 @@ async function integrationLogsPage(catalystApp, filters, { page, pageSize }) {
   return { rows: result.map((r) => r[INTEGRATION_LOGS_TABLE]), total };
 }
 
-// CREATEDTIME is stored in the project timezone (Asia/Kolkata, UTC+05:30).
-const PROJECT_UTC_OFFSET_MINUTES = 330;
-
+// CREATEDTIME is stored in the project timezone (PROJECT_TIMEZONE; see utils/projectTime.js).
 /** A Date as the 'YYYY-MM-DD HH:mm:ss' project-time string CREATEDTIME is compared against. */
 function toProjectDateTime(date) {
-  const shifted = new Date(date.getTime() + PROJECT_UTC_OFFSET_MINUTES * 60 * 1000);
-  return shifted.toISOString().slice(0, 19).replace('T', ' ');
+  return formatProjectDateTime(date);
 }
 
 // Bound for a single report window; hitting it is reported, never hidden.

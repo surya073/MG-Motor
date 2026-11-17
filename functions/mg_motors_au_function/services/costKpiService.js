@@ -1,6 +1,7 @@
 'use strict';
 
 const dashboardStats = require('./dashboardStatsService');
+const { projectDay } = require('../utils/projectTime');
 const { toCatalystDateTime } = require('../utils/dateFormat');
 
 /**
@@ -31,7 +32,6 @@ const MAX_UPLOAD_DAYS = 62;
 const MAX_ROUTES_PER_DAY = 60;
 const MAX_WINDOW_DAYS = 90;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
-const IST_OFFSET_MS = 330 * 60 * 1000;
 
 const USAGE_COUNTERS = {
   requests: 'requests',
@@ -64,8 +64,9 @@ function opsCost(ops) {
   return Math.round(Object.entries(PRICE).reduce((sum, [kind, price]) => sum + (ops[kind] || 0) * price, 0) * 100) / 100;
 }
 
-function istDay(date) {
-  return new Date(date.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
+// The usage day is the project's calendar day (PROJECT_TIMEZONE; see utils/projectTime.js).
+function projectUsageDay(date) {
+  return projectDay(date);
 }
 
 /** Validates usageReport.js --json output: { days: { day: { route: counters } } }. */
@@ -143,7 +144,7 @@ async function addBillingSnapshot(catalystApp, body) {
   for (const kind of ['fetch', 'update', 'insert', 'delete']) ops[kind] = count(body[kind], kind);
   const row = await catalystApp.datastore().table(TABLE).insertRow({
     record_type: 'BILLING',
-    usage_day: istDay(at),
+    usage_day: projectUsageDay(at),
     snapshot_at: toCatalystDateTime(at),
     ds_fetch: ops.fetch,
     ds_update: ops.update,
@@ -218,8 +219,8 @@ function daysInMonth(day) {
 
 async function getCostKpis(catalystApp, { days = 30, now = new Date() } = {}) {
   const windowDays = Math.min(MAX_WINDOW_DAYS, Math.max(1, Math.floor(Number(days)) || 30));
-  const today = istDay(now);
-  const fromDay = istDay(new Date(now.getTime() - (windowDays - 1) * 24 * 3600 * 1000));
+  const today = projectUsageDay(now);
+  const fromDay = projectUsageDay(new Date(now.getTime() - (windowDays - 1) * 24 * 3600 * 1000));
 
   const [usageRows, billingRows, leads] = await Promise.all([
     dashboardStats.selectEveryRow(catalystApp, TABLE,
@@ -330,5 +331,5 @@ module.exports = {
   uploadUsage,
   addBillingSnapshot,
   deleteBillingSnapshot,
-  _test: { parseUsageUpload, opsCost, leadOutcomes, PRICE },
+  _test: { parseUsageUpload, opsCost, leadOutcomes, PRICE, projectUsageDay },
 };

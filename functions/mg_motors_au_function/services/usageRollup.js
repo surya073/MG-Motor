@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { projectHourLabel, formatProjectDateTime } = require('../utils/projectTime');
 const { isUsageRollupEnabled } = require('../config/env');
 
 /**
@@ -28,7 +29,6 @@ const IDLE_FLUSH_MS = 20 * 1000;
 const COST_MODULE = '(cost module)';
 // The payload column is Catalyst `text` (10,000 chars); a longer hour is split.
 const MAX_PAYLOAD_CHARS = 9000;
-const IST_OFFSET_MS = 330 * 60 * 1000;
 
 const instanceTag = crypto.randomBytes(6).toString('hex');
 let pending = new Map(); // bucket_hour -> { components: {}, credits: {} }
@@ -42,8 +42,10 @@ function rememberApp(getApp) {
   getLatestApp = getApp;
 }
 
+// Hourly buckets and flushed_at are written in project time (PROJECT_TIMEZONE; see
+// utils/projectTime.js), the zone the Data Store shows its datetime columns in.
 function bucketHour(ms = Date.now()) {
-  return new Date(ms + IST_OFFSET_MS).toISOString().slice(0, 13).replace('T', ' ');
+  return projectHourLabel(ms);
 }
 
 function emptyComponent() {
@@ -132,7 +134,7 @@ function payloads(hourly) {
 }
 
 function catalystDateTime(ms) {
-  return new Date(ms + IST_OFFSET_MS).toISOString().slice(0, 19).replace('T', ' ');
+  return formatProjectDateTime(ms);
 }
 
 /**
@@ -206,5 +208,5 @@ module.exports = {
   flushIfDue,
   rememberApp,
   bucketHour,
-  _test: { reset, isDue, payloads, pending: () => pending, FLUSH_EVERY_MS, IDLE_FLUSH_MS },
+  _test: { catalystDateTime, reset, isDue, payloads, pending: () => pending, FLUSH_EVERY_MS, IDLE_FLUSH_MS },
 };

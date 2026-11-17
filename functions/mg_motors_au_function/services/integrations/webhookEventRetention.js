@@ -1,6 +1,7 @@
 'use strict';
 
 const logger = require('../../utils/logger');
+const { formatProjectDateTime } = require('../../utils/projectTime');
 const { getWebhookEventRetentionDays } = require('../../config/env');
 
 /**
@@ -17,21 +18,14 @@ const WEBHOOK_EVENTS_TABLE = 'webhook_events';
 // ZCQL refuses a LIMIT above 300 rows.
 const MAX_ROWS_PER_RUN = 300;
 const DELETE_CONCURRENCY = 10;
-// Catalyst system columns (CREATEDTIME) are in the project timezone,
-// Asia/Kolkata (see inboundReplayScheduler.js).
-const PROJECT_UTC_OFFSET_MINUTES = 330;
+// Catalyst system columns (CREATEDTIME) are in the project timezone (PROJECT_TIMEZONE;
+// see utils/projectTime.js).
 // fast-recover runs every 2 minutes; this window catches one run a day.
 const DAILY_WINDOW_START_MINUTE_UTC = 16 * 60;
 const DAILY_WINDOW_MINUTES = 2;
 
-function pad(n) {
-  return String(n).padStart(2, '0');
-}
-
 function toProjectSystemTime(ms) {
-  const d = new Date(ms + PROJECT_UTC_OFFSET_MINUTES * 60000);
-  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
-    `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+  return formatProjectDateTime(ms);
 }
 
 function isRetentionDue(now = new Date()) {

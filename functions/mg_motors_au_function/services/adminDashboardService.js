@@ -496,11 +496,9 @@ async function getDealerInvitationStatus(catalystApp, crmDealers) {
  * ========================================================================
  */
 
-// Catalyst's CREATEDTIME is in the project timezone (Asia/Kolkata,
-// Console > Settings > General) — same fact already relied on by
-// dealerReconciliationService.js's parseSystemTimestamp. Reproduced
-// locally here rather than importing that module, to keep this
-// read-only reporting file independent of the integration pipeline.
+// Catalyst's CREATEDTIME is in the project timezone (PROJECT_TIMEZONE; see
+// utils/projectTime.js). Day ranges below compare it with 'YYYY-MM-DD 00:00:00'
+// wall-clock strings, which is correct in any project timezone.
 function toDateOnly(value) {
   const raw = String(value || '').trim();
   return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : null;

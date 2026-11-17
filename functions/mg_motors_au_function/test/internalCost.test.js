@@ -1,5 +1,7 @@
 'use strict';
 
+process.env.PROJECT_TIMEZONE = 'Asia/Kolkata'; // fixtures here are written in the original IST project's time; Sydney is covered by projectTimezone.test.js
+
 // Internal cost module (23 Oct 2026): hourly usage totals saved by
 // usageRollup.js and read back by the key-protected /internal/cost page.
 

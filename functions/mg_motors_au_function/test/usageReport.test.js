@@ -1,5 +1,7 @@
 'use strict';
 
+process.env.PROJECT_TIMEZONE = 'Asia/Kolkata'; // fixtures here are written in the original IST project's time; Sydney is covered by projectTimezone.test.js
+
 // COST_OPTIMIZATION_PLAN.md, Batch 1: the daily sum of `[usage]` lines.
 
 const test = require('node:test');

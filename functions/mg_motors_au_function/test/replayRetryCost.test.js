@@ -26,7 +26,9 @@ const replay = require('../services/integrations/inboundReplayScheduler');
 const retry = require('../services/integrations/outboundRetryScheduler');
 const usageContext = require('../services/usageContext');
 
-const systemTime = (ms) => new Date(ms + 330 * 60000).toISOString().slice(0, 19).replace('T', ' ') + ':000';
+// Catalyst stores CREATEDTIME / MODIFIEDTIME in the project timezone (PROJECT_TIMEZONE), with milliseconds.
+const { formatProjectDateTime } = require('../utils/projectTime');
+const systemTime = (ms) => `${formatProjectDateTime(ms)}:000`;
 const utc = (ms) => new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
 const MAP_VERSION = '2026-01-01 00:00:00:000';
 // The marker a previous sweep left: status map and lead mapping as seen then.

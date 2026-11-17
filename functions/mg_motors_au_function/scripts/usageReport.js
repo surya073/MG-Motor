@@ -17,15 +17,19 @@
 
 const fs = require('node:fs');
 
+const { parseProjectDateTime, projectDay } = require('../utils/projectTime');
+
 const PRICE = { fetch: 0.0036, update: 0.0048, insert: 0.006, delete: 0.0048 };
-const IST_OFFSET_MS = 330 * 60 * 1000;
 
 function dayOf(line) {
   const match = /(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?/.exec(line);
   if (!match) return 'unknown';
-  const zone = match[3] ? match[3].replace(/^([+-]\d{2})(\d{2})$/, '$1:$2') : '+05:30';
-  const at = Date.parse(`${match[1]}T${match[2]}${zone}`);
-  return Number.isNaN(at) ? 'unknown' : new Date(at + IST_OFFSET_MS).toISOString().slice(0, 10);
+  // A time with an explicit zone is exact; one without is project time (PROJECT_TIMEZONE).
+  const zone = match[3] ? match[3].replace(/^([+-]\d{2})(\d{2})$/, '$1:$2') : null;
+  const at = zone
+    ? Date.parse(`${match[1]}T${match[2]}${zone}`)
+    : (parseProjectDateTime(`${match[1]} ${match[2]}`) || new Date(NaN)).getTime();
+  return Number.isNaN(at) ? 'unknown' : projectDay(at);
 }
 
 function parseUsageLine(line) {

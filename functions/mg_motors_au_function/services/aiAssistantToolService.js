@@ -1,6 +1,7 @@
 'use strict';
 
 const adminDashboardService = require('./adminDashboardService');
+const { projectClock } = require('../utils/projectTime');
 const crmIntegrationService = require('./integrations/crmIntegrationService');
 const leadAccessService = require('./leadAccessService');
 const pathPolicyService = require('./integrations/pathPolicyService');
@@ -28,10 +29,10 @@ const pathPolicyService = require('./integrations/pathPolicyService');
  * the dashboard already caps them, to keep Gemini's context bounded.
  */
 
-const PROJECT_UTC_OFFSET_MINUTES = 5 * 60 + 30; // Asia/Kolkata — matches adminDashboardService.js's PROJECT_UTC_OFFSET
-
+// "Today", "yesterday" and "this week" are the project's calendar days (PROJECT_TIMEZONE;
+// see utils/projectTime.js). The returned Date's UTC getters read the project's wall clock.
 function projectDateNow() {
-  return new Date(Date.now() + PROJECT_UTC_OFFSET_MINUTES * 60 * 1000);
+  return projectClock(Date.now());
 }
 
 function toDateOnlyString(d) {

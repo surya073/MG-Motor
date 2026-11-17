@@ -22,8 +22,10 @@ function withEnv(t, value) {
   });
 }
 
-// 13 Oct 2026 12:00 UTC = 17:30 in the project timezone (Asia/Kolkata).
+// CREATEDTIME is shown in the project timezone (PROJECT_TIMEZONE), with milliseconds.
 const NOW = Date.parse('2026-10-13T12:00:00Z');
+const DAY_MS = 24 * 60 * 60 * 1000;
+const stamp = (ms) => `${require('../utils/projectTime').formatProjectDateTime(ms)}:000`;
 
 test('retention days: unset, blank, zero, negative or not a number means off', (t) => {
   for (const value of [null, '', '0', '-5', 'thirty', '2.5']) {
@@ -47,8 +49,8 @@ test('only SUCCESS rows older than the cutoff (project time) are deleted', async
   withEnv(t, '30');
   const db = createInMemoryZcql({
     webhook_events: [
-      { processing_status: 'SUCCESS', CREATEDTIME: '2026-09-13 17:29:00:000' }, // 30 days + 1 min old
-      { processing_status: 'SUCCESS', CREATEDTIME: '2026-09-13 17:31:00:000' }, // 1 min short of 30 days
+      { processing_status: 'SUCCESS', CREATEDTIME: stamp(NOW - 30 * DAY_MS - 60000) }, // 30 days + 1 min old
+      { processing_status: 'SUCCESS', CREATEDTIME: stamp(NOW - 30 * DAY_MS + 60000) }, // 1 min short of 30 days
       { processing_status: 'FAILED', CREATEDTIME: '2026-08-01 00:00:00:000' },
       { processing_status: 'PENDING', CREATEDTIME: '2026-08-01 00:00:00:000' },
       { processing_status: 'SUCCESS', CREATEDTIME: '2026-10-13 10:00:00:000' },
@@ -56,7 +58,7 @@ test('only SUCCESS rows older than the cutoff (project time) are deleted', async
   });
   const result = await retention.purgeOldWebhookEvents(db.app, { now: NOW });
   assert.equal(result.deleted, 1);
-  assert.equal(result.cutoff, '2026-09-13 17:30:00');
+  assert.equal(result.cutoff, stamp(NOW - 30 * DAY_MS).slice(0, 19));
   assert.equal(result.more, false);
   assert.deepEqual(db.tables.webhook_events.map((row) => Boolean(row.__deleted)), [true, false, false, false, false]);
 });

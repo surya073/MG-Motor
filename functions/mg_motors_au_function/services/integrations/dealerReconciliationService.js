@@ -1,6 +1,7 @@
 'use strict';
 
 const logger = require('../../utils/logger');
+const { parseProjectDateTime } = require('../../utils/projectTime');
 const { toCatalystDateTime } = require('../../utils/dateFormat');
 const crmIntegrationService = require('./crmIntegrationService');
 const crmAdapterFactory = require('./crmAdapterFactory');
@@ -51,16 +52,9 @@ const RECONCILE_CONCURRENCY = (() => {
 const MG_ONLY_WAITING_STATUSES = new Set(['Unattended Alert', 'Update Pending']);
 const DELIVERED_LEAD_STATES = new Set(['SYNCED', 'SLA_BREACH']);
 
-// Catalyst system columns (CREATEDTIME) are in the project timezone —
-// Asia/Kolkata for this project (Console > Settings > General).
-const PROJECT_UTC_OFFSET = '+05:30';
-
-function parseSystemTimestamp(value) {
-  const match = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(?::(\d{1,3}))?$/.exec(String(value || '').trim());
-  if (!match) return null;
-  const parsed = new Date(`${match[1]}T${match[2]}.${(match[3] || '0').padStart(3, '0')}${PROJECT_UTC_OFFSET}`);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
+// Catalyst system columns (CREATEDTIME) are in the project timezone (PROJECT_TIMEZONE;
+// see utils/projectTime.js), daylight saving included.
+const parseSystemTimestamp = parseProjectDateTime;
 
 function safeQuoteForZcql(value) {
   return String(value).replace(/'/g, "''");
@@ -575,4 +569,4 @@ async function reportMissingDealerRecordUnderClaim(catalystApp, integration, map
 // sweepOverlapGuard.js. Exported name/signature unchanged.
 const runDealerReconciliation = guardSweep('dealerReconciliation', withMappingCache(runDealerReconciliationInternal));
 
-module.exports = { runDealerReconciliation };
+module.exports = { runDealerReconciliation, _test: { parseSystemTimestamp } };

@@ -18,7 +18,8 @@ const dashboardStats = require('../services/dashboardStatsService');
 // The per-dealer push switch: off = no new leads reach the dealer (quietly); turning it
 // on either sends the queued leads or skips them and carries on from that moment.
 
-const CONNECTED = '2026-11-05 07:55:00:000'; // IST, = 5 Nov 02:25 UTC
+// 5 Nov 02:25 UTC, as the Data Store shows a CREATEDTIME in the project timezone.
+const CONNECTED = `${require('../utils/projectTime').formatProjectDateTime(Date.parse('2026-11-05T02:25:00Z'))}:000`;
 const AFTER = '2026-11-05 10:00:00'; // UTC lead creation, after connecting
 const skipReason = (integration, lead) => crmIntegrationService.newLeadSkipReason(integration, lead);
 

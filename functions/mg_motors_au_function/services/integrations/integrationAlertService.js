@@ -2,6 +2,7 @@
 
 const nodemailer = require('nodemailer');
 const logger = require('../../utils/logger');
+const { projectDay } = require('../../utils/projectTime');
 const { notifyAdmins } = require('../notificationService');
 const emailTemplates = require('./emailTemplates');
 const alertContext = require('./alertContext');
@@ -256,7 +257,7 @@ async function sendTestAlert(catalystApp) {
 
 async function sendDailyReportEmail(catalystApp, content, html) {
   return sendConfiguredEmail(catalystApp, {
-    subject: `[DAILY REPORT] MG Lead Exchange — ${new Date().toISOString().slice(0, 10)}`,
+    subject: `[DAILY REPORT] MG Lead Exchange — ${projectDay(Date.now())}`,
     content,
     html,
     recipientEnv: 'DAILY_ERROR_REPORT_TO_EMAILS',

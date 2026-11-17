@@ -19,8 +19,10 @@ const { isDealerStudioNewLeadsOnly, isFusionSdNewLeadsOnly } = require('../confi
 // Asia/Kolkata = UTC+05:30). A lead's creation time is assigned_date (UTC).
 // Connected 5 Nov 2026 07:55 IST = 5 Nov 02:25 UTC.
 
-const CONNECTED_5_NOV = '2026-11-05 07:55:00:000';
-const CONNECTED_3_NOV = '2026-11-03 06:47:00:000';
+// CREATEDTIME is shown in the project timezone: 5 Nov 02:25 UTC and 3 Nov 01:17 UTC.
+const projectStamp = (utc) => `${require('../utils/projectTime').formatProjectDateTime(Date.parse(utc))}:000`;
+const CONNECTED_5_NOV = projectStamp('2026-11-05T02:25:00Z');
+const CONNECTED_3_NOV = projectStamp('2026-11-03T01:17:00Z');
 const OLD = '2026-10-20 05:00:00';
 const AFTER_CONNECT = '2026-11-05 03:00:00';
 const DS = { crm_type: 'DEALER_STUDIO', base_url: 'https://8.8.8.8', create_lead_endpoint: '/api/v1/leads', CREATEDTIME: CONNECTED_5_NOV };
@@ -54,9 +56,10 @@ test('the cutoff is per dealer: the same lead is blocked for a later-connected d
 });
 
 test('a lead without assigned_date falls back to the lead row CREATEDTIME (project time)', () => {
-  assert.equal(before(DS, { CREATEDTIME: '2026-11-05 07:54:59:869' }, true), true);
-  assert.equal(before(DS, { CREATEDTIME: '2026-11-05 07:55:00:000' }, true), false);
-  assert.equal(before(DS, { assigned_date: '', CREATEDTIME: '2026-09-01 10:00:00:000' }, true), true);
+  // The dealer connected at 5 Nov 02:25:00.000 UTC; the lead row's CREATEDTIME is shown in the project timezone.
+  assert.equal(before(DS, { CREATEDTIME: projectStamp('2026-11-05T02:24:59.869Z') }, true), true);
+  assert.equal(before(DS, { CREATEDTIME: projectStamp('2026-11-05T02:25:00.000Z') }, true), false);
+  assert.equal(before(DS, { assigned_date: '', CREATEDTIME: projectStamp('2026-09-01T00:00:00Z') }, true), true);
 });
 
 test('nothing is blocked when a date cannot be read, for other CRMs, or when the switch is off', () => {

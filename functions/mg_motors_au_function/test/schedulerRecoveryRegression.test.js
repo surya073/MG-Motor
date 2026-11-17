@@ -105,7 +105,7 @@ test('transport failure after a mapping edit remains retryable with backoff', as
   db.app.datastore = () => ({ table: (name) => {
     const table = raw().table(name);
     return { ...table, updateRow: (row) => table.updateRow({ ...row,
-      MODIFIEDTIME: new Date(Date.now() + 330 * 60000).toISOString().slice(0, 23).replace('T', ' ').replace('.', ':'),
+      MODIFIEDTIME: `${require('../utils/projectTime').formatProjectDateTime(Date.now())}:000`,
     }) };
   } });
   await replay.runInboundReplaySweep(db.app);

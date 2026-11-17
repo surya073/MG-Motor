@@ -30,10 +30,10 @@ test('the project timezone defaults to Asia/Kolkata, can be set, and ignores an 
 
 test('a project wall-clock string is read in the project zone, with or without :ms', () => {
   withTimezone('Asia/Kolkata', () => {
-    assert.equal(iso(parseProjectDateTime('2026-11-01 14:27:46:466')), '2026-11-01T08:57:46.000Z');
+    assert.equal(iso(parseProjectDateTime('2026-11-01 14:27:46:466')), '2026-11-01T08:57:46.466Z'); // ms are kept
   });
   withTimezone('Australia/Sydney', () => {
-    assert.equal(iso(parseProjectDateTime('2026-11-16 22:34:53:896')), '2026-11-16T11:34:53.000Z'); // AEDT, +11
+    assert.equal(iso(parseProjectDateTime('2026-11-16 22:34:53:896')), '2026-11-16T11:34:53.896Z'); // AEDT, +11, ms kept
     assert.equal(iso(parseProjectDateTime('2026-09-23 08:57:02')), '2026-09-22T22:57:02.000Z'); // AEST, +10
   });
 });

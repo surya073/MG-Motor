@@ -1,5 +1,7 @@
 'use strict';
 
+process.env.PROJECT_TIMEZONE = 'Asia/Kolkata'; // fixtures here are written in the original IST project's time; Sydney is covered by projectTimezone.test.js
+
 // Catalyst writes its own CREATEDTIME / MODIFIEDTIME in the project timezone
 // (Asia/Kolkata, UTC+05:30) as "YYYY-MM-DD HH:MM:SS:mmm". The alert digest
 // read them as UTC, so on a UTC runtime a queued failure looked 5.5 hours in
@@ -48,7 +50,7 @@ test('parseSystemTimestamp gives the same instant whatever the runtime timezone'
   const script = path.join(__dirname, '..', 'services', 'integrations', 'pathPolicyService.js');
   const outputs = ['UTC', 'Asia/Kolkata', 'Australia/Sydney'].map((tz) =>
     execFileSync(process.execPath, ['-e', `console.log(require(${JSON.stringify(script)}).parseSystemTimestamp('2026-10-14 10:05:48:285').toISOString())`], {
-      env: { ...process.env, TZ: tz },
+      env: { ...process.env, TZ: tz, PROJECT_TIMEZONE: 'Asia/Kolkata' },
     }).toString().trim()
   );
   assert.deepEqual(outputs, Array(3).fill('2026-10-14T04:35:48.285Z'));

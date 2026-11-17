@@ -1,6 +1,7 @@
 'use strict';
 
 const logger = require('../../utils/logger');
+const { parseProjectDateTime } = require('../../utils/projectTime');
 const { getInboundReplayIdleSkipMinutes } = require('../../config/env');
 const crmIntegrationService = require('./crmIntegrationService');
 const crmAdapterFactory = require('./crmAdapterFactory');
@@ -46,17 +47,9 @@ const UNHAPPY_7_RETENTION_MINUTES = Number.isFinite(configuredRetention) && conf
   ? configuredRetention
   : DEFAULT_UNHAPPY_7_RETENTION_MINUTES;
 
-// Catalyst system columns are written in the project timezone
-// (Asia/Kolkata for this project — Console > Settings > General).
-const PROJECT_UTC_OFFSET = '+05:30';
-
-function parseSystemTimestamp(value) {
-  const match = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(?::(\d{1,3}))?$/.exec(String(value || '').trim());
-  if (!match) return null;
-  const ms = (match[3] || '0').padStart(3, '0');
-  const parsed = new Date(`${match[1]}T${match[2]}.${ms}${PROJECT_UTC_OFFSET}`);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
+// Catalyst system columns are written in the project timezone (PROJECT_TIMEZONE;
+// see utils/projectTime.js), daylight saving included.
+const parseSystemTimestamp = parseProjectDateTime;
 
 // Each replay reads the record from the dealer CRM (one API credit). A
 // held update that keeps failing is retried less often the longer it has
@@ -722,4 +715,4 @@ async function runInboundReplaySweepInternal(catalystApp, { deadline, windowSequ
 // sweepOverlapGuard.js. Exported name/signature unchanged.
 const runInboundReplaySweep = guardSweep('inboundReplaySweep', withMappingCache(runInboundReplaySweepInternal));
 
-module.exports = { runInboundReplaySweep, _test: { selectReplayCandidates, HEAD_ROWS, TAIL_ROWS, resetIdleMemo } };
+module.exports = { runInboundReplaySweep, _test: { parseSystemTimestamp, selectReplayCandidates, HEAD_ROWS, TAIL_ROWS, resetIdleMemo } };
