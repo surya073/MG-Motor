@@ -22,15 +22,11 @@ test('oemReferenceFields uses the OEM API names and never writes a blank referen
   assert.deepEqual(oemReferenceFields(), {});
 });
 
-test('the delivery acknowledgement carries the two references only when they are known', () => {
+test('the delivery acknowledgement does not carry the references: they are written in a separate best-effort call', () => {
   const integration = { crm_type: 'FUSION_SD' };
   assert.deepEqual(
-    crmIntegrationService.deliveryAcknowledgementFields(integration),
-    { Lead_Status: 'Not Contacted', Lead_Exchanged: true, Connected_CRM: 'Fusion SD' }
-  );
-  assert.deepEqual(
     crmIntegrationService.deliveryAcknowledgementFields(integration, { dealerCrmId: 'D-9', middlewareId: '77' }),
-    { Lead_Status: 'Not Contacted', Lead_Exchanged: true, Connected_CRM: 'Fusion SD', Dealer_CRM_ID: 'D-9', Middleware_ID: '77' }
+    { Lead_Status: 'Not Contacted', Lead_Exchanged: true, Connected_CRM: 'Fusion SD' }
   );
 });
 
