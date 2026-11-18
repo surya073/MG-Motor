@@ -1,7 +1,7 @@
 'use strict';
 
 const axios = require('axios');
-const { getZohoConfig } = require('../config/env');
+const { getZohoConfig, getPublicFunctionBaseUrl, isOemWatchRegistrationEnabled } = require('../config/env');
 const { getAccessToken } = require('./zohoAuthService');
 const { toCatalystDateTime } = require('../utils/dateFormat');
 const logger = require('../utils/logger');
@@ -25,15 +25,25 @@ function toZohoDateTime(date) {
   return `${y}-${mo}-${d}T${h}:${mi}:${s}+00:00`;
 }
 
+// No hardcoded fallback: getPublicFunctionBaseUrl() throws when
+// PUBLIC_FUNCTION_BASE_URL is missing or malformed (see config/env.js).
 function buildNotifyUrl() {
-  const baseUrl = String(
-    process.env.PUBLIC_FUNCTION_BASE_URL ||
-    'https://mg-motors-au-7007717417.development.catalystserverless.com.au/server/mg_motors_au_function'
-  ).replace(/\/$/, '');
-  return `${baseUrl}/webhooks/crm-notify`;
+  return `${getPublicFunctionBaseUrl()}/webhooks/crm-notify`;
 }
 
+const OEM_WATCH_EVENTS = ['Dealers.all', 'Leads.all'];
+
 async function registerWatchChannelsInternal(catalystApp) {
+  // Both checks run before any Zoho call, so a project that must not own the
+  // OEM subscription (or has no URL configured) changes nothing in Zoho:
+  // the existing channel is neither deregistered nor replaced.
+  if (!isOemWatchRegistrationEnabled()) {
+    logger.error('zohoWebhookService', 'OEM watch registration skipped: OEM_WATCH_REGISTRATION_ENABLED is not true in this project; nothing was registered or deregistered');
+    throw Object.assign(new Error(
+      'OEM watch registration is disabled in this project. Set OEM_WATCH_REGISTRATION_ENABLED=true only in the project that owns the OEM webhook.'
+    ), { code: 'OEM_WATCH_REGISTRATION_DISABLED' });
+  }
+  const notifyUrl = buildNotifyUrl();
   const { apiDomain, webhookToken } = getZohoConfig();
   const watchUrl = await validatedWatchUrl(apiDomain);
   const accessToken = await getAccessToken();
@@ -61,8 +71,8 @@ async function registerWatchChannelsInternal(catalystApp) {
         // so Zoho never had anything to fire notifications for, which is
         // why lead changes only ever showed up via manual sync while
         // Dealer_Master (a real module name) synced live via webhook.
-        events: ['Dealers.all', 'Leads.all'],
-        notify_url: buildNotifyUrl(),
+        events: OEM_WATCH_EVENTS,
+        notify_url: notifyUrl,
         token: deriveZohoWatchToken(webhookToken),
         channel_expiry: channelExpiryStr,
       },
@@ -71,7 +81,8 @@ async function registerWatchChannelsInternal(catalystApp) {
 
   let response;
   try {
-    logger.info('zohoWebhookService', `Calling watch API at ${apiDomain}/crm/v8/actions/watch (OEM)`);
+    // notify_url is not a secret (the token travels separately and is never logged).
+    logger.info('zohoWebhookService', `Calling watch API at ${apiDomain}/crm/v8/actions/watch (OEM) notify_url=${notifyUrl}`);
     response = await usageContext.trackApiCall('mg', () => axios.post(watchUrl.toString(), payload, {
       ...safeRequestOptions(watchUrl),
       headers: {
@@ -100,8 +111,8 @@ async function registerWatchChannelsInternal(catalystApp) {
     expires_at: toCatalystDateTime(expiryDate),
   });
 
-  logger.info('zohoWebhookService', `Registered watch channel ${channelId}, expires ${channelExpiryStr}`);
-  return { channelId, expiresAt: channelExpiryStr };
+  logger.info('zohoWebhookService', `Registered watch channel ${channelId} (OEM) notify_url=${notifyUrl} events=${OEM_WATCH_EVENTS.join(',')}, expires ${channelExpiryStr}`);
+  return { channelId, expiresAt: channelExpiryStr, notifyUrl };
 }
 
 // Guarded against two overlapping OEM renewal runs (e.g. a manual trigger
@@ -116,11 +127,7 @@ const registerWatchChannels = guardSweep('oemWebhookRenewal', registerWatchChann
 const { getAccessTokenForDealerZoho } = require('./integrations/adapters/zohoCrmOAuthHelper');
 
 function buildDealerNotifyUrl(dealerCode) {
-  const baseUrl = String(
-    process.env.PUBLIC_FUNCTION_BASE_URL ||
-    'https://mg-motors-au-7007717417.development.catalystserverless.com.au/server/mg_motors_au_function'
-  ).replace(/\/$/, '');
-  return `${baseUrl}/webhooks/dealers/${encodeURIComponent(dealerCode)}`;
+  return `${getPublicFunctionBaseUrl()}/webhooks/dealers/${encodeURIComponent(dealerCode)}`;
 }
 
 /**
@@ -193,6 +200,9 @@ async function registerDealerWatchChannelInternal(catalystApp, integration) {
   // or the callback authentication token. Keep the pinned URL for POST/DELETE.
   const watchUrl = await validatedWatchUrl(integration.base_url);
   assertZohoEndpoint(integration.oauth_accounts_domain || 'https://accounts.zoho.in', 'accounts');
+  // Built before any credential read or deregistration, so a missing
+  // PUBLIC_FUNCTION_BASE_URL leaves the dealer's existing channel untouched.
+  const notifyUrl = buildDealerNotifyUrl(integration.dealer_code);
   const apiDomain = watchUrl.origin;
   const accessToken = await getAccessTokenForDealerZoho(catalystApp, integration);
   const webhookSecret = await integrationAuthService.getDecryptedCredential(
@@ -223,7 +233,7 @@ async function registerDealerWatchChannelInternal(catalystApp, integration) {
         // create/delete generated false Unhappy 7/4 events because those
         // records cannot be resolved through lead_integrations.
         events: ['Leads.edit'],
-        notify_url: buildDealerNotifyUrl(integration.dealer_code),
+        notify_url: notifyUrl,
         channel_expiry: channelExpiryStr,
         token: deriveZohoWatchToken(webhookSecret),
         return_affected_field_values: true,
@@ -269,7 +279,7 @@ async function registerDealerWatchChannelInternal(catalystApp, integration) {
     expires_at: toCatalystDateTime(expiryDate),
   });
 
-  logger.info('zohoWebhookService', `Registered dealer watch channel ${channelId} for ${integration.dealer_code}, expires ${channelExpiryStr}`);
+  logger.info('zohoWebhookService', `Registered dealer watch channel ${channelId} for ${integration.dealer_code} notify_url=${notifyUrl}, expires ${channelExpiryStr}`);
   return { dealerCode: integration.dealer_code, channelId, expiresAt: channelExpiryStr };
 }
 

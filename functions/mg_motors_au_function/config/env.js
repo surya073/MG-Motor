@@ -30,6 +30,47 @@ function getZohoConfig() {
 }
 
 /**
+ * PUBLIC_FUNCTION_BASE_URL: this project's own deployed function URL, e.g.
+ * https://<project-domain>/server/mg_motors_au_function (no trailing slash).
+ * Zoho watch channels deliver notifications to URLs built from it. There is
+ * deliberately NO built-in fallback: a hardcoded default once pointed the MG
+ * project's OEM channel at the trial project, which rejected every MG
+ * notification with 401 while MG received none. Missing or malformed throws
+ * before anything is registered or deregistered.
+ */
+function getPublicFunctionBaseUrl() {
+  const raw = String(process.env.PUBLIC_FUNCTION_BASE_URL || '').trim();
+  const invalid = (detail) => Object.assign(new Error(
+    `PUBLIC_FUNCTION_BASE_URL ${detail}. Set it in Catalyst Console → mg_motors_au_function → ` +
+    'Environment Variables (and catalyst-config.json) to this project\'s function URL.'
+  ), { code: 'PUBLIC_FUNCTION_BASE_URL_INVALID' });
+  if (!raw) throw invalid('is not set');
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw invalid('is not a valid URL');
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
+    throw invalid('must be a plain https URL with no credentials, query or fragment');
+  }
+  return url.toString().replace(/\/+$/, '');
+}
+
+/**
+ * OEM_WATCH_REGISTRATION_ENABLED=true lets this project register and renew the
+ * OEM CRM watch channel (cron /cron/renew-webhook, admin /admin/register-webhook).
+ * Off by default. The OEM Zoho org keeps ONE watch subscription per OAuth user,
+ * and the trial and MG projects share those credentials, so any other project
+ * running this code would take the subscription (notify URL and token) away
+ * from the owning project. Set it to true only in the project that owns the
+ * OEM webhook. Dealer watch channels are not affected. Read on every call.
+ */
+function isOemWatchRegistrationEnabled() {
+  return String(process.env.OEM_WATCH_REGISTRATION_ENABLED || '').trim().toLowerCase() === 'true';
+}
+
+/**
  * Optional lower bound (ISO 8601, e.g. 2026-10-08T00:00:00+11:00) on the OEM
  * lead Created_Time that lead sync pulls. MG's OEM org holds ~72k historical
  * leads that must not be mirrored or pushed to dealers; unset means "all
@@ -507,6 +548,8 @@ module.exports = {
   isDealerStudioNewLeadsOnly,
   isFusionSdNewLeadsOnly,
   getZohoConfig,
+  getPublicFunctionBaseUrl,
+  isOemWatchRegistrationEnabled,
   getIntegrationCredentialsKey,
   getAiAssistantConfig,
   getLeadSyncSince,

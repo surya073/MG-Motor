@@ -21,7 +21,8 @@ The concrete Pilot scope is **Happy 1–5 plus Unhappy 1–10 (15 paths)**. The 
 Configure these Catalyst environment variables before deployment:
 
 - `CRON_SECRET`: long random secret sent as `X-Cron-Secret` by every scheduler job.
-- `PUBLIC_FUNCTION_BASE_URL`: deployed function base URL, without a trailing slash.
+- `PUBLIC_FUNCTION_BASE_URL`: **required**, this project's own deployed function base URL (`https://<project-domain>/server/mg_motors_au_function`), without a trailing slash. Every Zoho watch channel (OEM and dealer) sends notifications to a URL built from it; there is no built-in fallback, and registration fails before touching Zoho when it is missing or not a plain https URL. Keep it in `catalyst-config.json` too, or a deploy unsets it.
+- `OEM_WATCH_REGISTRATION_ENABLED=true`: set **only** in the project that owns the OEM CRM webhook (the MG AU project). Off by default. The OEM Zoho org keeps one watch subscription per OAuth user and the projects share credentials, so a second project registering would take the subscription away. With it off, `/cron/renew-webhook` and `/admin/register-webhook` change nothing in Zoho.
 - `INTEGRATION_CREDENTIALS_KEY`: encryption key already required by dealer credential storage.
 - `INTEGRATION_ALERT_FROM_EMAIL`: verified Catalyst sender.
 - `INTEGRATION_ALERT_TO_EMAILS`: comma-separated MG and FI Digital immediate-alert recipients.

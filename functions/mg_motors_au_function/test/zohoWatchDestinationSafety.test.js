@@ -1,4 +1,8 @@
 'use strict';
+
+// No built-in notify URL any more; OEM registration is opt-in (config/env.js).
+process.env.PUBLIC_FUNCTION_BASE_URL = process.env.PUBLIC_FUNCTION_BASE_URL || 'https://functions.test.example/server/mg_motors_au_function';
+process.env.OEM_WATCH_REGISTRATION_ENABLED = 'true';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const axios = require('axios');
