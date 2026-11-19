@@ -9,6 +9,7 @@ const zohoCrmService = require('../services/zohoCrmService');
 const crmIntegrationService = require('../services/integrations/crmIntegrationService');
 const webhookVerificationService = require('../services/integrations/webhookVerificationService');
 const fusionReturnChannelProof = require('../services/integrations/fusionReturnChannelProof');
+const dealerStudioLocationRouting = require('../services/integrations/dealerStudioLocationRouting');
 const logger = require('../utils/logger');
 const usageContext = require('../services/usageContext');
 
@@ -112,7 +113,7 @@ router.post('/webhooks/dealers/:dealerCode', express.raw({ type: 'application/js
     const dealer = await crmIntegrationService.findDealerByCode(catalystApp, dealerCode);
     if (!dealer || dealer.sync_status === 'Removed') return res.status(404).json({ error: 'DEALER_NOT_FOUND' });
 
-    const integration = await crmIntegrationService.getIntegrationByDealerCode(catalystApp, dealerCode);
+    let integration = await crmIntegrationService.getIntegrationByDealerCode(catalystApp, dealerCode);
     if (!integration || integration.integration_type !== 'EXTERNAL_CRM'
       || ['DISABLED', 'NOT_CONFIGURED', 'CONFIGURING'].includes(integration.status)
       || !isEnabled(integration.inbound_enabled)) {
@@ -131,6 +132,18 @@ router.post('/webhooks/dealers/:dealerCode', express.raw({ type: 'application/js
       payload = JSON.parse(rawBody.toString('utf8'));
     } catch {
       return res.status(400).json({ error: 'INVALID_CRM_CONFIGURATION' });
+    }
+
+    // One Dealer Studio account posts all its locations to one MG dealer's URL
+    // (Heartland: Castle Hill and Penrith). Verified with that dealer's secret
+    // above; the cluster then goes to the MG dealer of the same account it names.
+    if (integration.crm_type === 'DEALER_STUDIO') {
+      const routed = await dealerStudioLocationRouting.resolveTargetIntegration(catalystApp, integration, payload);
+      if (routed.integration !== integration) {
+        logger.info('webhookRoutes', `Dealer Studio post on ${dealerCode}'s URL routed to ${routed.integration.dealer_code} by ${routed.routedBy}`);
+        usageContext.annotate({ dealerCode: routed.integration.dealer_code, routedFrom: dealerCode });
+        integration = routed.integration;
+      }
     }
 
     // Fusion's dealer_id is MG's dealer code only if MG gave Fusion one, and
