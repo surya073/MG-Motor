@@ -51,20 +51,27 @@ test('dealer watch refuses private DNS and ineligible integrations before secret
   assert.equal(secrets.mock.callCount(), 0);
 });
 
-test('watch register and deregister both pin a validated destination and refuse redirects/proxies', async (t) => {
+test('every watch call (list, renew, create, read back, delete) pins a validated destination and refuses redirects/proxies', async (t) => {
   const { db } = fixture(t);
+  const notifyUrl = `${process.env.PUBLIC_FUNCTION_BASE_URL}/webhooks/dealers/AU999`;
   const requests = [];
-  t.mock.method(axios, 'post', async (url, body, config) => {
+  t.mock.method(axios, 'post', async (url) => {
     if (url.includes('/oauth/')) return { data: { access_token: 'synthetic-access-token', expires_in: 3600 } };
-    requests.push({ url, config });
-    assert.equal(typeof body.watch[0].token, 'string');
+    throw new Error(`unexpected POST ${url}`);
+  });
+  t.mock.method(axios, 'request', async (config) => {
+    requests.push(config);
+    if (config.method === 'GET') {
+      return { data: { watch: [{ channel_id: config.params?.channel_id || 'old', notify_url: notifyUrl, events: ['Leads.edit'], channel_expiry: '2030-01-01T00:00:00+00:00' }] } };
+    }
+    if (config.method === 'PATCH') throw Object.assign(new Error('gone'), { response: { status: 404 } });
+    if (config.method === 'POST') assert.equal(typeof config.data.watch[0].token, 'string');
     return { data: { watch: [{ code: 'SUCCESS' }] } };
   });
-  t.mock.method(axios, 'delete', async (url, config) => { requests.push({ url, config }); return { data: {} }; });
   await watch.registerDealerWatchChannel(db.app, integration);
-  assert.equal(requests.length, 2);
-  for (const { url, config } of requests) {
-    assert.equal(url, 'https://www.zohoapis.in/crm/v8/actions/watch');
+  assert.deepEqual(requests.map((r) => r.method), ['GET', 'PATCH', 'POST', 'GET', 'DELETE']);
+  for (const config of requests) {
+    assert.equal(config.url, 'https://www.zohoapis.in/crm/v8/actions/watch');
     assert.equal(config.maxRedirects, 0);
     assert.equal(config.proxy, false);
     assert.equal(config.adapter, 'http');
@@ -77,9 +84,11 @@ test('watch API failures never expose the vendor body, request headers or callba
   const { db } = fixture(t);
   const logs = [];
   t.mock.method(logger, 'error', (...args) => logs.push(args));
-  t.mock.method(axios, 'delete', async () => { throw Object.assign(new Error('synthetic-sensitive-value'), { response: { status: 404, data: 'synthetic-sensitive-value' } }); });
   t.mock.method(axios, 'post', async (url) => {
     if (url.includes('/oauth/')) return { data: { access_token: 'synthetic-sensitive-value', expires_in: 3600 } };
+    throw new Error(`unexpected POST ${url}`);
+  });
+  t.mock.method(axios, 'request', async () => {
     throw Object.assign(new Error('synthetic-sensitive-value'), { response: { status: 302, data: 'synthetic-sensitive-value' }, config: { headers: { Authorization: 'synthetic-sensitive-value' } } });
   });
   await assert.rejects(watch.registerDealerWatchChannel(db.app, integration), (err) => {

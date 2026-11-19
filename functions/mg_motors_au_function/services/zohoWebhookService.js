@@ -1,7 +1,9 @@
 'use strict';
 
 const axios = require('axios');
-const { getZohoConfig, getPublicFunctionBaseUrl, isOemWatchRegistrationEnabled } = require('../config/env');
+const {
+  getZohoConfig, getPublicFunctionBaseUrl, isOemWatchRegistrationEnabled, getOemWatchLifetimeConfig,
+} = require('../config/env');
 const { getAccessToken } = require('./zohoAuthService');
 const { toCatalystDateTime } = require('../utils/dateFormat');
 const logger = require('../utils/logger');
@@ -11,6 +13,9 @@ const { deriveZohoWatchToken } = require('./integrations/webhookVerificationServ
 const { guardSweep } = require('./integrations/sweepOverlapGuard');
 const { assertZohoEndpoint } = require('./integrations/adapters/zohoEndpointPolicy');
 const { assertSafeUrl, safeRequestOptions } = require('./integrations/adapters/safeHttp');
+const operationClaims = require('./integrations/integrationOperationClaimService');
+const pathPolicy = require('./integrations/pathPolicyService');
+const writeOwnership = require('./writeOwnership');
 
 const ZOHO_REQUEST_TIMEOUT_MS = 10000;
 
@@ -32,11 +37,227 @@ function buildNotifyUrl() {
 }
 
 const OEM_WATCH_EVENTS = ['Dealers.all', 'Leads.all'];
+const OEM_MODULE_NAME = 'Dealers,Leads';
+const DEALER_WATCH_EVENTS = ['Leads.edit'];
+// Requested lifetime. Zoho v8 allows up to one week, but a value beyond the
+// limit silently becomes ONE HOUR (and older docs say one day), so it stays
+// under a day; renewal is driven by remaining lifetime (OEM review 4.6).
+const CHANNEL_LIFETIME_MS = 23 * 60 * 60 * 1000;
+
+function authHeaders(accessToken) {
+  return { Authorization: `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' };
+}
+
+async function watchRequest(apiLabel, watchUrl, accessToken, { method, data, params }) {
+  return usageContext.trackApiCall(apiLabel, () => axios.request({
+    method,
+    url: watchUrl.toString(),
+    ...safeRequestOptions(watchUrl),
+    headers: authHeaders(accessToken),
+    ...(data ? { data } : {}),
+    ...(params ? { params } : {}),
+    timeout: ZOHO_REQUEST_TIMEOUT_MS,
+  }));
+}
+
+/**
+ * Zoho lists one entry per watched module; one channel spans several. Returns
+ * one object per channel: { channelId, notifyUrl, events, expiresAt }.
+ */
+function groupWatchEntries(entries) {
+  const channels = new Map();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const channelId = String(entry?.channel_id || '').trim();
+    if (!channelId) continue;
+    const channel = channels.get(channelId) || { channelId, notifyUrl: null, events: [], expiresAt: null };
+    if (entry.notify_url) channel.notifyUrl = String(entry.notify_url);
+    for (const event of Array.isArray(entry.events) ? entry.events : []) {
+      if (!channel.events.includes(event)) channel.events.push(event);
+    }
+    const expiry = entry.channel_expiry ? new Date(entry.channel_expiry) : null;
+    if (expiry && !Number.isNaN(expiry.getTime()) && (!channel.expiresAt || expiry < channel.expiresAt)) {
+      channel.expiresAt = expiry;
+    }
+    channels.set(channelId, channel);
+  }
+  return [...channels.values()];
+}
+
+async function listChannels(apiLabel, watchUrl, accessToken, params) {
+  const response = await watchRequest(apiLabel, watchUrl, accessToken, { method: 'GET', params });
+  return groupWatchEntries(response?.data?.watch);
+}
+
+/** Zoho reports `Leads.all` back as Leads.create / Leads.edit / Leads.delete. */
+function coversEvents(actual, wanted) {
+  const have = new Set(actual);
+  return wanted.every((event) => {
+    const [module, operation] = event.split('.');
+    if (operation !== 'all') return have.has(event) || have.has(`${module}.all`);
+    return have.has(event) || ['create', 'edit', 'delete'].every((op) => have.has(`${module}.${op}`));
+  });
+}
+
+function succeeded(response) {
+  const result = response?.data?.watch?.[0];
+  return result?.status === 'success' || result?.code === 'SUCCESS';
+}
+
+function rejectionCode(response) {
+  return String(response?.data?.watch?.[0]?.code || 'INVALID_RESPONSE').replace(/[^A-Z0-9_]/g, '').slice(0, 80);
+}
+
+/** The OEM org id the token belongs to, for the channel's ownership record; null when unreadable. */
+async function zohoOrgId(apiLabel, apiOrigin, accessToken) {
+  try {
+    const orgUrl = await assertSafeUrl(`${apiOrigin}/crm/v8/org`);
+    const response = await usageContext.trackApiCall(apiLabel, () => axios.request({
+      method: 'GET',
+      url: orgUrl.toString(),
+      ...safeRequestOptions(orgUrl),
+      headers: authHeaders(accessToken),
+      timeout: ZOHO_REQUEST_TIMEOUT_MS,
+    }));
+    const id = response?.data?.org?.[0]?.id;
+    return id ? String(id) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Records the channel as Zoho reports it. The extended columns (notify_url,
+ * events, owner_project_id, owner_environment, zoho_org_id) are optional: a
+ * table without them gets the base row. A failed write is logged, not thrown:
+ * the channel is live, and the next renewal finds it in Zoho's own list.
+ */
+async function persistChannel(catalystApp, baseRow, extendedRow) {
+  const table = catalystApp.datastore().table('webhook_channels');
+  try {
+    await table.insertRow({ ...baseRow, ...extendedRow });
+    return true;
+  } catch {
+    try {
+      await table.insertRow(baseRow);
+      return true;
+    } catch (err) {
+      logger.error('zohoWebhookService', `Channel ${baseRow.channel_id} is live but could not be recorded locally`, err);
+      return false;
+    }
+  }
+}
+
+/**
+ * Renews the channel that delivers to `notifyUrl` in place, or creates one when
+ * none exists (OEM review 4.1). Zoho's own channel list is the source of truth,
+ * not the newest local row. Nothing is deleted before a working channel is
+ * confirmed, and only channels of this notify URL are touched, so another
+ * project's channel is left alone.
+ */
+async function renewOrCreateChannel({ scopeLabel, apiLabel, watchUrl, accessToken, notifyUrl, events, watchExtras }) {
+  const expiryDate = new Date(Date.now() + CHANNEL_LIFETIME_MS);
+  const channelExpiry = toZohoDateTime(expiryDate);
+  const body = (channelId) => ({
+    watch: [{ channel_id: channelId, events, notify_url: notifyUrl, channel_expiry: channelExpiry, ...watchExtras }],
+  });
+
+  let ours = [];
+  try {
+    ours = (await listChannels(apiLabel, watchUrl, accessToken)).filter((channel) => channel.notifyUrl === notifyUrl);
+  } catch (err) {
+    // An unreadable list must not block renewal: create one, and the next
+    // renewal (which can read the list) removes any duplicate.
+    logger.error('zohoWebhookService', `Could not list watch channels for ${scopeLabel}; a new channel will be created`, `HTTP ${err.response?.status || 'network error'}`);
+  }
+  ours.sort((a, b) => (b.expiresAt?.getTime() || 0) - (a.expiresAt?.getTime() || 0));
+
+  let channelId = null;
+  let mode = null;
+  if (ours.length > 0) {
+    const candidate = ours[0].channelId;
+    try {
+      const response = await watchRequest(apiLabel, watchUrl, accessToken, {
+        method: 'PATCH',
+        data: body(/^\d+$/.test(candidate) ? Number(candidate) : candidate),
+      });
+      if (succeeded(response)) {
+        channelId = candidate;
+        mode = 'renewed';
+      } else {
+        logger.error('zohoWebhookService', `Zoho did not renew channel ${candidate} for ${scopeLabel} (${rejectionCode(response)}); creating a new one`);
+      }
+    } catch (err) {
+      logger.error('zohoWebhookService', `Renewing channel ${candidate} for ${scopeLabel} failed; creating a new one`, `HTTP ${err.response?.status || 'network error'}`);
+    }
+  }
+
+  if (!channelId) {
+    const newId = Date.now();
+    let response;
+    try {
+      logger.info('zohoWebhookService', `Calling watch API (create) for ${scopeLabel} notify_url=${notifyUrl}`);
+      response = await watchRequest(apiLabel, watchUrl, accessToken, { method: 'POST', data: body(newId) });
+    } catch (err) {
+      const zohoError = `HTTP ${err.response?.status || 'network error'}`;
+      logger.error('zohoWebhookService', `Failed to register watch channel for ${scopeLabel}`, zohoError);
+      throw new Error(`Watch channel registration failed: ${JSON.stringify(zohoError)}`);
+    }
+    if (!succeeded(response)) {
+      throw new Error(`Zoho rejected watch registration for ${scopeLabel}: ${rejectionCode(response)}`);
+    }
+    channelId = String(newId);
+    mode = 'created';
+  }
+
+  // Read the channel back: what Zoho holds is what gets recorded.
+  let readBack = null;
+  try {
+    readBack = (await listChannels(apiLabel, watchUrl, accessToken, { channel_id: channelId }))
+      .find((channel) => channel.channelId === String(channelId)) || null;
+  } catch (err) {
+    logger.error('zohoWebhookService', `Could not read back channel ${channelId} for ${scopeLabel}`, `HTTP ${err.response?.status || 'network error'}`);
+  }
+  const verified = Boolean(readBack && readBack.notifyUrl === notifyUrl && coversEvents(readBack.events, events));
+  if (readBack && !verified) {
+    logger.error('zohoWebhookService', `Channel ${channelId} for ${scopeLabel} read back with notify_url=${readBack.notifyUrl} events=${readBack.events.join(',')}; expected ${notifyUrl} ${events.join(',')}`);
+  }
+
+  // Only now, with a working channel confirmed, remove the other channels of
+  // this same notify URL (duplicates left by earlier renewals).
+  const duplicates = ours.map((channel) => channel.channelId).filter((id) => id !== String(channelId));
+  if (duplicates.length > 0) {
+    try {
+      await watchRequest(apiLabel, watchUrl, accessToken, { method: 'DELETE', params: { channel_ids: duplicates.join(',') } });
+      logger.info('zohoWebhookService', `Removed duplicate channel(s) ${duplicates.join(',')} for ${scopeLabel}`);
+    } catch (err) {
+      logger.error('zohoWebhookService', `Could not remove duplicate channel(s) ${duplicates.join(',')} for ${scopeLabel}`, `HTTP ${err.response?.status || 'network error'}`);
+    }
+  }
+
+  return {
+    channelId: String(channelId),
+    mode,
+    verified,
+    expiresAt: readBack?.expiresAt || expiryDate,
+    readBack,
+    removedDuplicates: duplicates,
+  };
+}
+
+function ownershipColumns(readBack, notifyUrl, orgId) {
+  const { projectId, environment } = writeOwnership.currentProject();
+  return {
+    notify_url: String(readBack?.notifyUrl || notifyUrl).slice(0, 255),
+    events: (readBack?.events || []).join(',').slice(0, 255),
+    owner_project_id: projectId,
+    owner_environment: environment,
+    zoho_org_id: orgId,
+  };
+}
 
 async function registerWatchChannelsInternal(catalystApp) {
   // Both checks run before any Zoho call, so a project that must not own the
-  // OEM subscription (or has no URL configured) changes nothing in Zoho:
-  // the existing channel is neither deregistered nor replaced.
+  // OEM subscription (or has no URL configured) changes nothing in Zoho.
   if (!isOemWatchRegistrationEnabled()) {
     logger.error('zohoWebhookService', 'OEM watch registration skipped: OEM_WATCH_REGISTRATION_ENABLED is not true in this project; nothing was registered or deregistered');
     throw Object.assign(new Error(
@@ -44,85 +265,84 @@ async function registerWatchChannelsInternal(catalystApp) {
     ), { code: 'OEM_WATCH_REGISTRATION_DISABLED' });
   }
   const notifyUrl = buildNotifyUrl();
+  writeOwnership.assertWriteOwner('the OEM watch channel');
   const { apiDomain, webhookToken } = getZohoConfig();
   const watchUrl = await validatedWatchUrl(apiDomain);
-  const accessToken = await getAccessToken();
 
-  // FIX: deregister the previous OEM channel before creating a new one —
-  // same reasoning, and now the same helper, as registerDealerWatchChannel's
-  // existing fix below: Zoho's watch API always ADDS a channel on POST
-  // rather than replacing an existing one, so without this every OEM
-  // renewal (manual or cron) piled up another duplicate channel, and
-  // Zoho would eventually send multiple notifications per Dealer_Master/
-  // Leads change. `null` scopes this to the shared OEM channel, never a
-  // dealer's.
-  await deregisterExistingChannel(catalystApp, null, accessToken, watchUrl);
-
-  const channelId = Date.now();
-  const expiryDate = new Date(Date.now() + 23 * 60 * 60 * 1000);
-  const channelExpiryStr = toZohoDateTime(expiryDate);
-
-  const payload = {
-    watch: [
-      {
-        channel_id: channelId,
-        // FIX: the real CRM module API name is "Leads" — zohoCrmService.js
-        // fetches from /crm/v8/Leads. "OEM_Leads" is not an actual module,
-        // so Zoho never had anything to fire notifications for, which is
-        // why lead changes only ever showed up via manual sync while
-        // Dealer_Master (a real module name) synced live via webhook.
-        events: OEM_WATCH_EVENTS,
-        notify_url: notifyUrl,
-        token: deriveZohoWatchToken(webhookToken),
-        channel_expiry: channelExpiryStr,
-      },
-    ],
-  };
-
-  let response;
-  try {
-    // notify_url is not a secret (the token travels separately and is never logged).
-    logger.info('zohoWebhookService', `Calling watch API at ${apiDomain}/crm/v8/actions/watch (OEM) notify_url=${notifyUrl}`);
-    response = await usageContext.trackApiCall('mg', () => axios.post(watchUrl.toString(), payload, {
-      ...safeRequestOptions(watchUrl),
-      headers: {
-        Authorization: `Zoho-oauthtoken ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: ZOHO_REQUEST_TIMEOUT_MS,
-    }));
-    logger.info('zohoWebhookService', 'Watch API call returned (OEM)');
-  } catch (err) {
-    const zohoError = `HTTP ${err.response?.status || 'network error'}`;
-    logger.error('zohoWebhookService', 'Failed to register watch channel', zohoError || err.message || err);
-    throw new Error(`Watch channel registration failed: ${JSON.stringify(zohoError) || err.message}`);
-  }
-
-  const result = response.data?.watch?.[0];
-  if (result?.status !== 'success' && result?.code !== 'SUCCESS') {
-    throw new Error(`Zoho rejected watch registration: ${String(result?.code || 'INVALID_RESPONSE').replace(/[^A-Z0-9_]/g, '').slice(0, 80)}`);
-  }
-
-  const table = catalystApp.datastore().table('webhook_channels');
-  await table.insertRow({
-    channel_id: channelId,
-    module_name: 'Dealers,Leads',
-    registered_at: toCatalystDateTime(new Date()),
-    expires_at: toCatalystDateTime(expiryDate),
+  // One renewal at a time across every instance of this project: a durable
+  // lease (guardSweep below covers only one warm instance).
+  return operationClaims.withOperationClaim(catalystApp, 'oem-watch-renewal', async () => {
+    const accessToken = await getAccessToken();
+    const result = await renewOrCreateChannel({
+      scopeLabel: 'OEM',
+      apiLabel: 'mg',
+      watchUrl,
+      accessToken,
+      notifyUrl,
+      events: OEM_WATCH_EVENTS,
+      watchExtras: { token: deriveZohoWatchToken(webhookToken) },
+    });
+    const orgId = await zohoOrgId('mg', watchUrl.origin, accessToken);
+    await persistChannel(catalystApp, {
+      channel_id: result.channelId,
+      module_name: OEM_MODULE_NAME,
+      registered_at: toCatalystDateTime(new Date()),
+      expires_at: toCatalystDateTime(result.expiresAt),
+    }, ownershipColumns(result.readBack, notifyUrl, orgId));
+    const expiresAt = toZohoDateTime(result.expiresAt);
+    logger.info('zohoWebhookService', `${result.mode === 'renewed' ? 'Renewed' : 'Registered'} watch channel ${result.channelId} (OEM) notify_url=${notifyUrl} events=${OEM_WATCH_EVENTS.join(',')}, expires ${expiresAt}, verified=${result.verified}`);
+    return { channelId: result.channelId, expiresAt, notifyUrl, mode: result.mode, verified: result.verified };
   });
-
-  logger.info('zohoWebhookService', `Registered watch channel ${channelId} (OEM) notify_url=${notifyUrl} events=${OEM_WATCH_EVENTS.join(',')}, expires ${channelExpiryStr}`);
-  return { channelId, expiresAt: channelExpiryStr, notifyUrl };
 }
 
-// Guarded against two overlapping OEM renewal runs (e.g. a manual trigger
-// racing a scheduled one) — same sweepOverlapGuard.js mechanism already
-// used by outboundRetryScheduler.js/inboundReplayScheduler.js/
-// dealerReconciliationService.js/slaMonitorService.js. A single static
-// key is correct here: there is exactly one OEM channel, so this function
-// is never legitimately expected to run more than once at a time.
-// Exported name/signature unchanged for cronRoutes.js.
+// guardSweep cheaply stops one instance overlapping itself; the durable
+// operation claim inside covers every instance. Exported name unchanged.
 const registerWatchChannels = guardSweep('oemWebhookRenewal', registerWatchChannelsInternal);
+
+/** The latest recorded OEM channel row, or null. */
+async function latestOemChannelRow(catalystApp) {
+  const rows = await catalystApp.zcql().executeZCQLQuery(
+    `SELECT * FROM webhook_channels WHERE module_name = '${OEM_MODULE_NAME}' ORDER BY CREATEDTIME DESC LIMIT 1`
+  );
+  return rows[0]?.webhook_channels || null;
+}
+
+/**
+ * For the frequent fast-recover run (OEM review 4.6): renews the OEM channel
+ * once less than OEM_WATCH_RENEW_BEFORE_MINUTES of its life remains, and calls
+ * `alert` when it is about to lapse (or has) and could not be renewed, or when
+ * Zoho reads it back wrong. A project that does not own the OEM webhook does
+ * nothing. Costs one Data Store read when renewal is not due.
+ */
+async function ensureOemWatchChannelFresh(catalystApp, { now = new Date(), alert } = {}) {
+  if (!isOemWatchRegistrationEnabled() || !writeOwnership.isWriteOwner()) {
+    return { skipped: true, reason: 'NOT_OEM_WATCH_OWNER' };
+  }
+  const { renewBeforeMinutes, alertBelowMinutes } = getOemWatchLifetimeConfig();
+  const row = await latestOemChannelRow(catalystApp);
+  const expiresAt = pathPolicy.parseTimestamp(row?.expires_at);
+  const remainingMinutes = expiresAt ? Math.floor((expiresAt.getTime() - now.getTime()) / 60000) : null;
+  if (remainingMinutes !== null && remainingMinutes >= renewBeforeMinutes) {
+    return { renewed: false, remainingMinutes };
+  }
+
+  let result = null;
+  let error = null;
+  try {
+    result = await registerWatchChannels(catalystApp);
+  } catch (err) {
+    error = err;
+    logger.error('zohoWebhookService', 'OEM watch channel renewal failed', err);
+  }
+  const renewed = Boolean(result && !result.skipped && result.channelId);
+  if (alert && !renewed && (remainingMinutes === null || remainingMinutes < alertBelowMinutes)) {
+    await alert({ remainingMinutes, reason: error ? error.message : (result?.reason || 'renewal did not run') });
+  }
+  if (alert && renewed && result.verified === false) {
+    await alert({ remainingMinutes, reason: `channel ${result.channelId} was read back with a different notify URL or events, or could not be read back` });
+  }
+  return { renewed, remainingMinutes, ...(result ? { result } : {}), ...(error ? { error: error.message } : {}) };
+}
 
 const { getAccessTokenForDealerZoho } = require('./integrations/adapters/zohoCrmOAuthHelper');
 
@@ -131,64 +351,9 @@ function buildDealerNotifyUrl(dealerCode) {
 }
 
 /**
- * Deregisters the most recently registered watch channel for the given
- * scope (per our own webhook_channels record of it) before a new one is
- * created. Zoho's watch API always creates an ADDITIONAL channel on POST
- * — it does not replace an existing one for the same module/notify_url —
- * so without this, every renewal (manual or cron-driven) leaves the
- * previous channel active, and Zoho ends up sending duplicate
- * notifications for every future update. Safe to no-op if there's no
- * prior record, or if the old channel already expired naturally on
- * Zoho's side (DELETE on an already-gone channel_id just fails
- * harmlessly and is logged, not thrown).
- *
- * `dealerCode`: a dealer's code to scope to that dealer's own channel
- * (identical behavior to before this was generalized), or null/undefined
- * for the single shared OEM channel. OEM rows are matched via
- * module_name = 'Dealers,Leads' — the fixed value only
- * registerWatchChannels ever writes — rather than an empty/absent
- * dealer_code, since every dealer row's module_name is always the
- * different fixed value 'Leads' (written only by
- * registerDealerWatchChannel). This can never accidentally match a
- * dealer channel, keeping the OEM and dealer scopes correctly separated
- * regardless of how an unset dealer_code column happens to be stored.
- */
-async function deregisterExistingChannel(catalystApp, dealerCode, accessToken, watchUrl) {
-  const whereClause = dealerCode
-    ? `dealer_code = '${String(dealerCode).replace(/'/g, "''")}'`
-    : `module_name = 'Dealers,Leads'`;
-  const existing = await catalystApp.zcql().executeZCQLQuery(
-    `SELECT * FROM webhook_channels WHERE ${whereClause} ORDER BY CREATEDTIME DESC LIMIT 1`
-  );
-  if (existing.length === 0) return;
-
-  const oldChannelId = existing[0].webhook_channels.channel_id;
-  const scopeLabel = dealerCode || 'OEM';
-  try {
-    await usageContext.trackApiCall(dealerCode || 'mg', () => axios.delete(watchUrl.toString(), {
-      ...safeRequestOptions(watchUrl),
-      headers: {
-        Authorization: `Zoho-oauthtoken ${accessToken}`,
-      },
-      params: { channel_ids: String(oldChannelId) },
-      timeout: ZOHO_REQUEST_TIMEOUT_MS,
-    }));
-    logger.info('zohoWebhookService', `Deregistered old channel ${oldChannelId} for ${scopeLabel}`);
-  } catch (err) {
-    logger.error(
-      'zohoWebhookService',
-      `Failed to deregister old channel ${oldChannelId} for ${scopeLabel} (may have already expired)`,
-      `HTTP ${err.response?.status || 'network error'}`
-    );
-  }
-}
-
-/**
- * Registers a Zoho CRM watch channel on a DEALER's own Zoho org (not our
- * OEM one), so their Leads module changes notify OUR per-dealer webhook
- * route instead of the shared /webhooks/crm-notify used for OEM leads.
- * Mirrors registerWatchChannels() above but scoped to one dealer's
- * credentials, one dealer's notify URL, and its own webhook_channels row.
+ * Registers or renews the Zoho CRM watch channel on a DEALER's own Zoho org
+ * (not our OEM one), so their Leads edits notify OUR per-dealer webhook route.
+ * Same in-place renewal as the OEM channel (OEM review 4.1).
  */
 async function registerDealerWatchChannelInternal(catalystApp, integration) {
   if (!isDealerWatchEligible(integration)) {
@@ -197,13 +362,13 @@ async function registerDealerWatchChannelInternal(catalystApp, integration) {
     });
   }
   // Validate the whole destination before looking up either OAuth credentials
-  // or the callback authentication token. Keep the pinned URL for POST/DELETE.
+  // or the callback authentication token.
   const watchUrl = await validatedWatchUrl(integration.base_url);
   assertZohoEndpoint(integration.oauth_accounts_domain || 'https://accounts.zoho.in', 'accounts');
-  // Built before any credential read or deregistration, so a missing
-  // PUBLIC_FUNCTION_BASE_URL leaves the dealer's existing channel untouched.
+  // Built before any credential read, so a missing PUBLIC_FUNCTION_BASE_URL
+  // leaves the dealer's existing channel untouched.
   const notifyUrl = buildDealerNotifyUrl(integration.dealer_code);
-  const apiDomain = watchUrl.origin;
+  writeOwnership.assertWriteOwner(`dealer ${integration.dealer_code}'s watch channel`);
   const accessToken = await getAccessTokenForDealerZoho(catalystApp, integration);
   const webhookSecret = await integrationAuthService.getDecryptedCredential(
     catalystApp, integration.ROWID, 'WEBHOOK_SECRET'
@@ -214,92 +379,41 @@ async function registerDealerWatchChannelInternal(catalystApp, integration) {
     });
   }
 
-  // FIX: deregister the previous channel for this dealer before creating
-  // a new one — Zoho's watch API always ADDS a channel on POST rather
-  // than replacing an existing one, so without this every renewal
-  // (manual or cron) piles up another duplicate channel, and Zoho starts
-  // sending multiple notifications per lead update.
-  await deregisterExistingChannel(catalystApp, integration.dealer_code, accessToken, watchUrl);
+  const result = await renewOrCreateChannel({
+    scopeLabel: integration.dealer_code,
+    apiLabel: integration.dealer_code,
+    watchUrl,
+    accessToken,
+    notifyUrl,
+    // Only edits can update an already-linked dealer lead. Listening to
+    // create/delete generated false Unhappy 7/4 events because those
+    // records cannot be resolved through lead_integrations.
+    events: DEALER_WATCH_EVENTS,
+    watchExtras: {
+      token: deriveZohoWatchToken(webhookSecret),
+      return_affected_field_values: true,
+      notify_on_related_action: false,
+    },
+  });
 
-  const channelId = Date.now();
-  const expiryDate = new Date(Date.now() + 23 * 60 * 60 * 1000);
-  const channelExpiryStr = toZohoDateTime(expiryDate);
-
-  const payload = {
-    watch: [
-      {
-        channel_id: channelId,
-        // Only edits can update an already-linked dealer lead. Listening to
-        // create/delete generated false Unhappy 7/4 events because those
-        // records cannot be resolved through lead_integrations.
-        events: ['Leads.edit'],
-        notify_url: notifyUrl,
-        channel_expiry: channelExpiryStr,
-        token: deriveZohoWatchToken(webhookSecret),
-        return_affected_field_values: true,
-        notify_on_related_action: false,
-      },
-    ],
-  };
-
-  let response;
-  try {
-    logger.info('zohoWebhookService', `Calling watch API at ${apiDomain}/crm/v8/actions/watch for ${integration.dealer_code}`);
-    response = await usageContext.trackApiCall(integration.dealer_code, () => axios.post(watchUrl.toString(), payload, {
-      ...safeRequestOptions(watchUrl),
-      headers: {
-        Authorization: `Zoho-oauthtoken ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: ZOHO_REQUEST_TIMEOUT_MS,
-    }));
-    logger.info('zohoWebhookService', `Watch API call returned for ${integration.dealer_code}`);
-  } catch (err) {
-    const zohoError = `HTTP ${err.response?.status || 'network error'}`;
-    logger.error(
-      'zohoWebhookService',
-      `Failed to register dealer watch channel for ${integration.dealer_code}`,
-      zohoError || err.message || err
-    );
-    throw new Error(`Dealer watch channel registration failed: ${JSON.stringify(zohoError) || err.message}`);
-  }
-
-  const result = response.data?.watch?.[0];
-  if (result?.status !== 'success' && result?.code !== 'SUCCESS') {
-    throw new Error(`Zoho rejected dealer watch registration for ${integration.dealer_code}: ${String(result?.code || 'INVALID_RESPONSE').replace(/[^A-Z0-9_]/g, '').slice(0, 80)}`);
-  }
-
-  const table = catalystApp.datastore().table('webhook_channels');
-  await table.insertRow({
-    channel_id: channelId,
+  await persistChannel(catalystApp, {
+    channel_id: result.channelId,
     dealer_code: integration.dealer_code,
     integration_id: integration.ROWID,
     module_name: 'Leads',
     registered_at: toCatalystDateTime(new Date()),
-    expires_at: toCatalystDateTime(expiryDate),
-  });
+    expires_at: toCatalystDateTime(result.expiresAt),
+  }, ownershipColumns(result.readBack, notifyUrl, null));
 
-  logger.info('zohoWebhookService', `Registered dealer watch channel ${channelId} for ${integration.dealer_code} notify_url=${notifyUrl}, expires ${channelExpiryStr}`);
-  return { dealerCode: integration.dealer_code, channelId, expiresAt: channelExpiryStr };
+  const expiresAt = toZohoDateTime(result.expiresAt);
+  logger.info('zohoWebhookService', `${result.mode === 'renewed' ? 'Renewed' : 'Registered'} dealer watch channel ${result.channelId} for ${integration.dealer_code} notify_url=${notifyUrl}, expires ${expiresAt}, verified=${result.verified}`);
+  return { dealerCode: integration.dealer_code, channelId: result.channelId, expiresAt, mode: result.mode, verified: result.verified };
 }
 
 /**
- * Guarded per-dealer against two overlapping renewal runs for the SAME
- * dealer (e.g. two /cron/renew-dealer-webhooks invocations overlapping,
- * or a manual retry racing the cron). Deliberately NOT one shared key
- * for every dealer: routes/cronRoutes.js now renews up to
- * DEALER_WEBHOOK_RENEWAL_CONCURRENCY dealers concurrently in the same
- * sweep (unchanged by this fix) — a single shared guard key would treat
- * every dealer after the first concurrent call as "already running" and
- * skip it, silently collapsing that concurrency down to 1. guardSweep()
- * is called fresh per call with a dealer-specific key
- * (`dealerWebhookRenewal:<dealer_code>`) rather than once at module load
- * like the single-key schedulers — this is still the exact same
- * sweepOverlapGuard.js mechanism and its one shared tracking map, just
- * keyed dynamically; different dealers' keys never collide, so they stay
- * fully concurrent, while the SAME dealer's key is correctly exclusive
- * across overlapping invocations. Exported name/signature unchanged for
- * cronRoutes.js.
+ * Guarded per dealer against two overlapping renewals of the SAME dealer
+ * (guardSweep keyed per dealer, so different dealers stay concurrent).
+ * Exported name/signature unchanged for cronRoutes.js.
  */
 async function registerDealerWatchChannel(catalystApp, integration) {
   return guardSweep(`dealerWebhookRenewal:${integration.dealer_code}`, registerDealerWatchChannelInternal)(catalystApp, integration);
@@ -316,4 +430,10 @@ async function validatedWatchUrl(baseUrl) {
   return assertSafeUrl(`${api.origin}/crm/v8/actions/watch`);
 }
 
-module.exports = { registerWatchChannels, registerDealerWatchChannel, isDealerWatchEligible };
+module.exports = {
+  registerWatchChannels,
+  registerDealerWatchChannel,
+  isDealerWatchEligible,
+  ensureOemWatchChannelFresh,
+  _test: { groupWatchEntries, coversEvents, CHANNEL_LIFETIME_MS },
+};

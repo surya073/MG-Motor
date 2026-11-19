@@ -168,6 +168,14 @@ function initialize(catalyst, req) {
   const ctx = req?.usageContext;
   if (!ctx) return app;
   if (storage.getStore() !== ctx) storage.enterWith(ctx);
+  // The project and environment this request runs in, from the headers Catalyst
+  // sets (x-zc-projectid / x-zc-environment). Read by writeOwnership.js.
+  if (!ctx.catalystProject && app?.config) {
+    ctx.catalystProject = {
+      projectId: app.config.projectId ? String(app.config.projectId) : null,
+      environment: app.config.environment ? String(app.config.environment) : null,
+    };
+  }
   return instrument(app, ctx);
 }
 

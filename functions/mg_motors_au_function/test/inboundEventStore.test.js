@@ -170,7 +170,8 @@ for (const [label, existing] of [
   test(`C4: a repeat of a ${label} event is processed again under a new lease`, async (t) => {
     const db = seeded(t, existing);
     const result = await record(db, FUSION, 'msg_1');
-    assert.deepEqual(result, { isDuplicate: false, eventRowId: '1000', reprocessed: true });
+    // replayable (OEM review 4.3): this stored row holds no decryptable copy.
+    assert.deepEqual(result, { isDuplicate: false, eventRowId: '1000', reprocessed: true, replayable: false });
     const row = db.tables.webhook_events[0];
     assert.equal(db.tables.webhook_events.length, 1);
     assert.equal(row.processing_status, 'RECEIVED');
@@ -226,7 +227,7 @@ test('review: with FUSION_INBOUND_V2, only what replay needs is stored, so a lon
   const row = db.tables.webhook_events[0];
   assert.ok(row.payload_encrypted.length <= 10000);
   assert.deepEqual(JSON.parse(integrationAuthService.decrypt(row.payload_encrypted)), {
-    lead_id: 'lead_01ABC', dealer_id: '725001', status: 'Lost', pushed_at: '2026-10-13T10:00:00Z',
+    lead_id: 'lead_01ABC', dealer_id: '725001', status: 'Lost', pushed_at: '2026-10-13T10:00:00Z', _store_version: 2,
   });
 });
 
@@ -251,7 +252,7 @@ test('with FUSION_INBOUND_V2, Fusion\'s enquiryStatus and leadId are stored for 
   await crmIntegrationService.checkAndRecordWebhookEvent(db.app, FUSION, body, 'msg_e1', { externalLeadId: 'lead_01ABC' });
   assert.deepEqual(JSON.parse(integrationAuthService.decrypt(db.tables.webhook_events[0].payload_encrypted)), {
     lead_id: 'lead_01ABC', leadId: 'lead_01ABC', dealer_id: '725001', enquiryStatus: 'Lost', pushed_at: '2026-10-28T00:29:44.838Z',
-    lostReason: 'Bought-Another-Brand',
+    lostReason: 'Bought-Another-Brand', _store_version: 2,
   });
 });
 
@@ -263,6 +264,6 @@ test('with FUSION_INBOUND_V2, a status under any other name is stored too, so it
   });
   await crmIntegrationService.checkAndRecordWebhookEvent(db.app, FUSION, body, 'msg_e2', { externalLeadId: 'lead_01ABC' });
   assert.deepEqual(JSON.parse(integrationAuthService.decrypt(db.tables.webhook_events[0].payload_encrypted)), {
-    lead_id: 'lead_01ABC', dealer_id: '725001', enquiry_status: 'Lost', pushed_at: '2026-10-28T00:29:44.838Z',
+    lead_id: 'lead_01ABC', dealer_id: '725001', enquiry_status: 'Lost', pushed_at: '2026-10-28T00:29:44.838Z', _store_version: 2,
   });
 });

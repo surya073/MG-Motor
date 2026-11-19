@@ -22,6 +22,8 @@ const zohoAuthService = require('../services/zohoAuthService');
 const zohoWebhookService = require('../services/zohoWebhookService');
 const { getPublicFunctionBaseUrl } = require('../config/env');
 const logger = require('../utils/logger');
+const { installZohoWatchFake, buildWatchCatalystApp } = require('./helpers/zohoWatchFake');
+const { _resetForTests: resetSweepGuard } = require('../services/integrations/sweepOverlapGuard');
 
 const AU_BASE = 'https://mg-motors-au-7007717417.development.catalystserverless.com.au/server/mg_motors_au_function';
 
@@ -51,25 +53,24 @@ function withEnv(t, vars) {
 
 function mockZoho(t) {
   zohoAuthService._resetForTests();
+  resetSweepGuard();
   t.mock.method(dns, 'lookup', async () => [{ address: '8.8.8.8', family: 4 }]);
-  const watchBodies = [];
-  const post = t.mock.method(axios, 'post', async (url, body) => {
-    if (url.includes('/oauth/v2/token')) return { data: { access_token: 'tok', expires_in: 3600 } };
-    if (url.includes('/crm/v8/actions/watch')) { watchBodies.push(body); return { data: { watch: [{ status: 'success' }] } }; }
-    throw new Error(`unexpected POST ${url}`);
-  });
-  const del = t.mock.method(axios, 'delete', async () => ({ data: {} }));
-  return { post, del, watchBodies };
+  const fake = installZohoWatchFake(t);
+  return {
+    fake,
+    // Every Zoho call: the OAuth token POST plus every watch/org request.
+    zohoCalls: () => axios.post.mock.callCount() + fake.calls.length,
+    watchBodies: () => fake.writes().filter((c) => c.method === 'POST').map((c) => c.data),
+  };
 }
 
 test('registration is refused, with no Zoho or Data Store call, unless OEM_WATCH_REGISTRATION_ENABLED=true', async (t) => {
   for (const flag of [undefined, '', 'false', 'yes', '1']) {
     withEnv(t, { OEM_WATCH_REGISTRATION_ENABLED: flag, PUBLIC_FUNCTION_BASE_URL: AU_BASE });
-    const { post, del } = mockZoho(t);
+    const { zohoCalls } = mockZoho(t);
     const app = fakeApp();
     await assert.rejects(zohoWebhookService.registerWatchChannels(app), { code: 'OEM_WATCH_REGISTRATION_DISABLED' });
-    assert.equal(post.mock.callCount(), 0, `flag=${flag}: no token or watch call`);
-    assert.equal(del.mock.callCount(), 0, `flag=${flag}: existing channel not deregistered`);
+    assert.equal(zohoCalls(), 0, `flag=${flag}: no token, watch or deregistration call`);
     assert.equal(app.queries.length + app.inserted.length, 0, `flag=${flag}: no Data Store access`);
     t.mock.restoreAll();
   }
@@ -79,10 +80,10 @@ test('a missing or malformed PUBLIC_FUNCTION_BASE_URL fails before the existing 
   for (const base of [undefined, '', '   ', 'not a url', 'http://insecure.example/server/f',
     'https://user:pw@host.example/server/f', 'https://host.example/server/f?x=1', 'https://host.example/server/f#x']) {
     withEnv(t, { OEM_WATCH_REGISTRATION_ENABLED: 'true', PUBLIC_FUNCTION_BASE_URL: base });
-    const { post, del } = mockZoho(t);
+    const { zohoCalls } = mockZoho(t);
     const app = fakeApp();
     await assert.rejects(zohoWebhookService.registerWatchChannels(app), { code: 'PUBLIC_FUNCTION_BASE_URL_INVALID' });
-    assert.equal(post.mock.callCount() + del.mock.callCount(), 0, `base=${base}: no Zoho call`);
+    assert.equal(zohoCalls(), 0, `base=${base}: no Zoho call`);
     assert.equal(app.queries.length, 0, `base=${base}: channel table not read`);
     t.mock.restoreAll();
   }
@@ -90,10 +91,11 @@ test('a missing or malformed PUBLIC_FUNCTION_BASE_URL fails before the existing 
 
 test('the registered notify_url is exactly PUBLIC_FUNCTION_BASE_URL + /webhooks/crm-notify, and it is logged without the token', async (t) => {
   withEnv(t, { OEM_WATCH_REGISTRATION_ENABLED: 'true', PUBLIC_FUNCTION_BASE_URL: `${AU_BASE}/` });
-  const { watchBodies } = mockZoho(t);
+  const { watchBodies: bodies } = mockZoho(t);
   const lines = [];
   t.mock.method(logger, 'info', (ctx, msg) => lines.push(String(msg)));
-  const result = await zohoWebhookService.registerWatchChannels(fakeApp());
+  const result = await zohoWebhookService.registerWatchChannels(buildWatchCatalystApp());
+  const watchBodies = bodies();
 
   const expected = `${AU_BASE}/webhooks/crm-notify`;
   assert.equal(watchBodies.length, 1);

@@ -5,6 +5,7 @@ const { getZohoConfig, getLeadSyncSince, zohoTimeoutOption } = require('../confi
 const { getAccessToken } = require('./zohoAuthService');
 const logger = require('../utils/logger');
 const usageContext = require('./usageContext');
+const { assertWriteOwner } = require('./writeOwnership');
 
 /**
  * zohoCrmService.js
@@ -304,6 +305,8 @@ async function fetchOemLeadsModifiedSince(modifiedSince) {
  * before attempting to persist dealer remarks.
  */
 async function updateOemLead(crmRecordId, fields) {
+  // Only the owning project writes to the OEM CRM (OEM review 4.4).
+  assertWriteOwner('the OEM CRM');
   const { apiDomain } = getZohoConfig();
   const accessToken = await getAccessToken();
 

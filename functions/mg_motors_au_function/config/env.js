@@ -71,6 +71,49 @@ function isOemWatchRegistrationEnabled() {
 }
 
 /**
+ * LEAD_EXCHANGE_OWNER_PROJECT_ID: the Catalyst project id that owns every write
+ * to the OEM CRM, to dealer CRMs and to Zoho watch channels (OEM review
+ * 19 Nov 2026, 4.4). When set, a project whose runtime id differs (or is
+ * unknown) writes nothing, so a second project running this code (the trial)
+ * cannot mutate shared systems. Unset: no restriction, as before. Digits only;
+ * anything else is treated as unset. Read on every call.
+ */
+function getWriteOwnerProjectId() {
+  const raw = String(process.env.LEAD_EXCHANGE_OWNER_PROJECT_ID || '').trim();
+  return /^\d+$/.test(raw) ? raw : null;
+}
+
+function boundedMinutes(name, fallback, min, max) {
+  const value = Number(String(process.env[name] ?? '').trim());
+  if (!Number.isFinite(value) || String(process.env[name] ?? '').trim() === '') return fallback;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+/**
+ * OEM watch channel lifetime management (OEM review 4.6). The channel is renewed
+ * by the frequent fast-recover run once less than OEM_WATCH_RENEW_BEFORE_MINUTES
+ * of its life remains (default 360, 60-1200), so a missed or failed daily run
+ * cannot leave a gap. Below OEM_WATCH_EXPIRY_ALERT_MINUTES (default 120, 15-600)
+ * an alert is raised. Read on every call.
+ */
+function getOemWatchLifetimeConfig() {
+  return {
+    renewBeforeMinutes: boundedMinutes('OEM_WATCH_RENEW_BEFORE_MINUTES', 360, 60, 1200),
+    alertBelowMinutes: boundedMinutes('OEM_WATCH_EXPIRY_ALERT_MINUTES', 120, 15, 600),
+  };
+}
+
+/**
+ * INBOUND_STALE_EVENT_GUARD (default on; 'false' turns it off): an inbound dealer
+ * event older than the last one applied to the same lead is not applied (OEM
+ * review 4.2). Needs lead_integrations.last_inbound_event_at; without that
+ * column it does nothing. Read on every call.
+ */
+function isInboundStaleEventGuardEnabled() {
+  return String(process.env.INBOUND_STALE_EVENT_GUARD ?? '').trim().toLowerCase() !== 'false';
+}
+
+/**
  * Optional lower bound (ISO 8601, e.g. 2026-10-08T00:00:00+11:00) on the OEM
  * lead Created_Time that lead sync pulls. MG's OEM org holds ~72k historical
  * leads that must not be mirrored or pushed to dealers; unset means "all
@@ -550,6 +593,9 @@ module.exports = {
   getZohoConfig,
   getPublicFunctionBaseUrl,
   isOemWatchRegistrationEnabled,
+  getWriteOwnerProjectId,
+  getOemWatchLifetimeConfig,
+  isInboundStaleEventGuardEnabled,
   getIntegrationCredentialsKey,
   getAiAssistantConfig,
   getLeadSyncSince,

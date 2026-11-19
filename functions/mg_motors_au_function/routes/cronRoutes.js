@@ -2,7 +2,9 @@
 
 const express = require('express');
 const catalyst = require('zcatalyst-sdk-node');
-const { registerWatchChannels, registerDealerWatchChannel, isDealerWatchEligible } = require('../services/zohoWebhookService');
+const {
+  registerWatchChannels, registerDealerWatchChannel, isDealerWatchEligible, ensureOemWatchChannelFresh,
+} = require('../services/zohoWebhookService');
 const crmIntegrationService = require('../services/integrations/crmIntegrationService');
 const outboundRetryScheduler = require('../services/integrations/outboundRetryScheduler'); // NEW
 const inboundReplayScheduler = require('../services/integrations/inboundReplayScheduler');
@@ -51,6 +53,22 @@ async function alertReconciliationFailure(catalystApp, err) {
     });
   } catch (alertErr) {
     logger.error('cronRoutes', 'Could not send reconciliation-failure alert', alertErr);
+  }
+}
+
+// Raised by the fast-recover OEM channel check when the OEM watch channel is
+// about to lapse and could not be renewed (OEM review 4.6). notifyScenario
+// de-duplicates repeats of the same cause.
+async function alertOemWatchChannel(catalystApp, { remainingMinutes, reason }) {
+  try {
+    await integrationAlertService.notifyScenario(catalystApp, {
+      scenarioCode: 'Unhappy 11',
+      scenarioMessage: 'OEM watch channel needs attention',
+      priority: 'P1',
+      reason: `The OEM CRM watch channel ${remainingMinutes === null ? 'has no recorded expiry' : (remainingMinutes <= 0 ? 'has expired' : `expires in ${remainingMinutes} minutes`)} and could not be renewed: ${reason}. OEM changes arrive only through the polling sweep until it is renewed.`,
+    });
+  } catch (alertErr) {
+    logger.error('cronRoutes', 'Could not send OEM watch channel alert', alertErr);
   }
 }
 
@@ -297,6 +315,19 @@ router.post('/cron/fast-recover', backgroundRun, async (req, res) => {
       } catch (err) {
         logger.error('cronRoutes', 'Webhook event retention within fast recovery failed', err);
         results.webhookEventRetention = { error: err.message };
+      }
+    }
+    // OEM watch channel lifetime (OEM review 4.6): renewed once it runs low, so
+    // a missed daily renewal cannot leave a gap. One read when not due.
+    if (Date.now() < deadline) {
+      usageContext.setStage('oemWatchChannel');
+      try {
+        results.oemWatchChannel = await ensureOemWatchChannelFresh(catalystApp, {
+          alert: (details) => alertOemWatchChannel(catalystApp, details),
+        });
+      } catch (err) {
+        logger.error('cronRoutes', 'OEM watch channel check within fast recovery failed', err);
+        results.oemWatchChannel = { error: err.message };
       }
     }
     // Trailing sync for Dealers notifications skipped during a burst (one

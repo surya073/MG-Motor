@@ -37,47 +37,12 @@ const { _resetForTests: resetSweepGuard } = require('../services/integrations/sw
 // down to 1, since guardSweep treats a second concurrent call with the
 // SAME key as "already running" and skips it.
 
-function buildFakeCatalystApp({ existingRows = [] } = {}) {
-  const insertedRows = [];
-  return {
-    zcql: () => ({
-      executeZCQLQuery: async (sql) => {
-        if (sql.includes('FROM webhook_channels')) {
-          if (sql.includes("module_name = 'Dealers,Leads'")) {
-            return existingRows.filter((r) => r.module_name === 'Dealers,Leads').map((r) => ({ webhook_channels: r }));
-          }
-          const dealerMatch = /dealer_code = '([^']*)'/.exec(sql);
-          if (dealerMatch) {
-            return existingRows.filter((r) => r.dealer_code === dealerMatch[1]).map((r) => ({ webhook_channels: r }));
-          }
-          return [];
-        }
-        throw new Error(`Unexpected ZCQL query in test: ${sql}`);
-      },
-    }),
-    datastore: () => ({
-      table: () => ({
-        getRow: async () => baseIntegration,
-        insertRow: async (fields) => {
-          insertedRows.push(fields);
-          return { ROWID: `new-${insertedRows.length}`, ...fields };
-        },
-      }),
-    }),
-    _insertedRows: insertedRows,
-  };
-}
+const { installZohoWatchFake, buildWatchCatalystApp } = require('./helpers/zohoWatchFake');
+
+const buildFakeCatalystApp = () => buildWatchCatalystApp({ integration: baseIntegration });
 
 function mockWatchApiSuccess(t, { registerDelayMs = 0 } = {}) {
-  t.mock.method(axios, 'post', async (url) => {
-    if (url.includes('/oauth/v2/token')) return { data: { access_token: 'tok', expires_in: 3600 } };
-    if (url.includes('/crm/v8/actions/watch')) {
-      if (registerDelayMs) await new Promise((resolve) => setTimeout(resolve, registerDelayMs));
-      return { data: { watch: [{ status: 'success', code: 'SUCCESS' }] } };
-    }
-    throw new Error(`Unexpected axios.post URL: ${url}`);
-  });
-  t.mock.method(axios, 'delete', async () => ({ data: {} }));
+  return installZohoWatchFake(t, { delayMs: registerDelayMs });
 }
 
 function buildIntegration(rowId, dealerCode) {
@@ -132,20 +97,12 @@ test('OEM: the guard is released after a successful renewal, allowing a later ca
 test('OEM: the guard is released even when the renewal throws, so a later call is not blocked forever', async (t) => {
   resetSweepGuard();
   zohoAuthService._resetForTests();
-  let callCount = 0;
-  t.mock.method(axios, 'post', async (url) => {
-    if (url.includes('/oauth/v2/token')) return { data: { access_token: 'tok', expires_in: 3600 } };
-    if (url.includes('/crm/v8/actions/watch')) {
-      callCount += 1;
-      if (callCount === 1) throw Object.assign(new Error('Zoho API down'), { response: { data: { code: 'SERVER_ERROR' } } });
-      return { data: { watch: [{ status: 'success', code: 'SUCCESS' }] } };
-    }
-    throw new Error(`Unexpected axios.post URL: ${url}`);
-  });
-  t.mock.method(axios, 'delete', async () => ({ data: {} }));
+  const fail = { post: true };
+  installZohoWatchFake(t, { fail });
   const catalystApp = buildFakeCatalystApp();
 
   await assert.rejects(() => zohoWebhookService.registerWatchChannels(catalystApp));
+  fail.post = false;
   const recovered = await zohoWebhookService.registerWatchChannels(catalystApp);
   assert.ok(recovered.channelId, 'the guard must be released after a thrown error, not left stuck');
 });

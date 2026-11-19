@@ -55,6 +55,18 @@ function buildFakeReqRes() {
   return { req, res, getStatus: () => statusCode, getJson: () => jsonBody };
 }
 
+// The watch API is reached through axios.request (list, create, read back).
+// No dealer has a channel yet, so each renewal lists, creates and reads back.
+// `onCreate(config)` runs for every create (POST).
+function mockWatch(t, onCreate = async () => {}) {
+  t.mock.method(axios, 'request', async (config) => {
+    if (!config.url.includes('/crm/v8/actions/watch')) throw new Error(`Unexpected axios.request URL: ${config.url}`);
+    if (config.method === 'GET') return { data: { watch: [] } };
+    if (config.method === 'POST') await onCreate(config);
+    return { data: { watch: [{ status: 'success', code: 'SUCCESS' }] } };
+  });
+}
+
 function buildDealerIntegration(rowId, dealerCode) {
   return {
     ROWID: rowId,
@@ -78,7 +90,7 @@ function buildFakeCatalystApp(integrations) {
           return integrations.filter((row) => row.dealer_code === code).map((row) => ({ dealers: { dealer_code: code, sync_status: row.test_dealer_status || 'Synced' } }));
         }
         if (sql.includes('FROM webhook_channels')) {
-          return []; // no prior channel — keeps each renewal on the simple "first registration" path
+          return [];
         }
         throw new Error(`Unexpected ZCQL query in test: ${sql}`);
       },
@@ -102,14 +114,13 @@ test('dealer webhook renewals run concurrently, never exceeding the configured l
   let maxActive = 0;
   t.mock.method(axios, 'post', async (url) => {
     if (url.includes('/oauth/v2/token')) return { data: { access_token: 'tok', expires_in: 3600 } };
-    if (url.includes('/crm/v8/actions/watch')) {
-      active += 1;
-      maxActive = Math.max(maxActive, active);
-      await new Promise((resolve) => setTimeout(resolve, 15));
-      active -= 1;
-      return { data: { watch: [{ status: 'success', code: 'SUCCESS' }] } };
-    }
     throw new Error(`Unexpected axios.post URL: ${url}`);
+  });
+  mockWatch(t, async () => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    active -= 1;
   });
 
   const { req, res, getStatus, getJson } = buildFakeReqRes();
@@ -132,6 +143,7 @@ test('all selected dealers are processed even when more exist than the concurren
     if (url.includes('/crm/v8/actions/watch')) return { data: { watch: [{ status: 'success', code: 'SUCCESS' }] } };
     throw new Error(`Unexpected axios.post URL: ${url}`);
   });
+  mockWatch(t);
 
   const { req, res, getJson } = buildFakeReqRes();
   await getHandler()(req, res);
@@ -159,6 +171,7 @@ test('one dealer\'s renewal failure does not prevent other dealers from being pr
     if (url.includes('/crm/v8/actions/watch')) return { data: { watch: [{ status: 'success', code: 'SUCCESS' }] } };
     throw new Error(`Unexpected axios.post URL: ${url}`);
   });
+  mockWatch(t);
 
   const { req, res, getStatus, getJson } = buildFakeReqRes();
   await getHandler()(req, res);
@@ -187,12 +200,9 @@ test('dealer isolation: each dealer renews against its own base_url/credentials,
   const registeredUrls = [];
   t.mock.method(axios, 'post', async (url) => {
     if (url.includes('/oauth/v2/token')) return { data: { access_token: 'tok', expires_in: 3600 } };
-    if (url.includes('/crm/v8/actions/watch')) {
-      registeredUrls.push(url);
-      return { data: { watch: [{ status: 'success', code: 'SUCCESS' }] } };
-    }
     throw new Error(`Unexpected axios.post URL: ${url}`);
   });
+  mockWatch(t, async (config) => { registeredUrls.push(config.url); });
 
   const { req, res, getJson } = buildFakeReqRes();
   await getHandler()(req, res);
@@ -218,6 +228,7 @@ test('renewal skips disabled, inbound-disabled and removed dealers without readi
   t.mock.method(axios, 'post', async (url) => url.includes('/oauth/')
     ? { data: { access_token: 'token', expires_in: 3600 } }
     : { data: { watch: [{ code: 'SUCCESS' }] } });
+  mockWatch(t);
   const { req, res, getJson } = buildFakeReqRes();
   await getHandler()(req, res);
   assert.deepEqual(getJson().results.map((row) => row.dealerCode), ['AU504']);

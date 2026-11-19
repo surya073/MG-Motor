@@ -20,6 +20,7 @@ const { classifyDealerError, isRetryableClass } = require('./dealerErrorClassifi
 const {
   getOutboundRetryConfig, isFusionInboundV2Enabled, isInboundEventStoreEnabled, isSlaDealerActionClockEnabled,
   isKeepOutboundRetryOnInboundEnabled, isDealerStudioNewLeadsOnly, isFusionSdNewLeadsOnly,
+  isInboundStaleEventGuardEnabled, getFusionInboundEditFields,
 } = require('../../config/env');
 const integrationAuthService = require('./integrationAuthService');
 const { translateFusionWebhook } = require('./adapters/fusionSdInbound');
@@ -29,6 +30,7 @@ const {
 const { applyDealerStudioPayloadRules } = require('./adapters/dealerStudioPayload');
 const { cachedForRun } = require('./mappingRunCache');
 const sentPayloadSnapshot = require('./sentPayloadSnapshot');
+const writeOwnership = require('../writeOwnership');
 const dealerStatusService = require('./dealerStatusService');
 
 const DEALERS_TABLE = 'dealers';
@@ -844,6 +846,12 @@ function newLeadSkipReason(integration, leadRow) {
 
 async function syncLeadToExternalCrm(catalystApp, integration, leadRow) {
   const zohoLeadId = leadRow.crm_record_id;
+  // A project that does not own writes (OEM review 4.4) sends nothing and
+  // records nothing: no claim, hold, failure or retry.
+  if (!writeOwnership.isWriteOwner()) {
+    logger.info('crmIntegrationService', `Lead ${zohoLeadId} (dealer ${integration.dealer_code}) not pushed: this project is not LEAD_EXCHANGE_OWNER_PROJECT_ID.`);
+    return { skipped: true, reason: 'WRITE_OWNERSHIP_DENIED' };
+  }
   // Every push (new-lead webhook, edits, retry sweep, reconciliation, replay) comes
   // through here. A lead created before this Dealer Studio dealer was connected is
   // never created in Dealer Studio: no hold, alert or retry. One already pushed (it
@@ -983,12 +991,22 @@ async function validateAndDispatchOutbound(catalystApp, integration, leadRow, re
  * on its own and never fails the caller, so switching the flag on before the
  * lead_integrations.last_dealer_action_at column exists breaks nothing.
  */
-async function stampDealerActionClock(catalystApp, mappingRowId) {
+async function stampDealerActionClock(catalystApp, mappingRowId, at) {
   if (!isSlaDealerActionClockEnabled() || !mappingRowId) return;
   try {
+    let stampAt = at || new Date();
+    // A dealer action dated by its event (OEM review 4.2) may be older than the
+    // clock already holds; the clock only ever moves forward.
+    if (at) {
+      const rows = await catalystApp.zcql().executeZCQLQuery(
+        `SELECT * FROM ${LEAD_INTEGRATIONS_TABLE} WHERE ROWID = ${Number(mappingRowId)} LIMIT 1`
+      );
+      const current = pathPolicy.parseTimestamp(rows[0]?.[LEAD_INTEGRATIONS_TABLE]?.last_dealer_action_at);
+      if (current && current >= stampAt) return;
+    }
     await catalystApp.datastore().table(LEAD_INTEGRATIONS_TABLE).updateRow({
       ROWID: mappingRowId,
-      last_dealer_action_at: toCatalystDateTime(),
+      last_dealer_action_at: toCatalystDateTime(stampAt),
     });
   } catch (err) {
     logger.error(
@@ -1331,6 +1349,8 @@ async function attemptExternalCrmSync(catalystApp, integration, leadRow, zohoLea
     if (integration.crm_type === 'FUSION_SD' && operation === 'UPDATE_LEAD') {
       await keepFusionStatusAhead(catalystApp, payload, fieldMappings, zohoLeadId);
     }
+    // Only the owning project writes to dealer CRMs (OEM review 4.4).
+    writeOwnership.assertWriteOwner(`dealer ${integration.dealer_code}'s CRM`);
     const adapter = crmAdapterFactory.getAdapter(integration.crm_type);
     const enquiryIdFieldMapping = fieldMappings.find(
       (mapping) => mapping.source_field === 'enquiry_id' && mapping.target_field
@@ -2519,7 +2539,8 @@ function canReplayFromStoredEvents(integration) {
   return usesInboundEventStore(integration) && !crmAdapterFactory.supports(integration.crm_type, 'getLead');
 }
 
-const STORED_EVENTS_TO_SCAN = 10;
+// Stored events of one dealer lead read per replay (OEM review 4.3: was 10).
+const STORED_EVENTS_TO_SCAN = 50;
 
 // How long a Dealer Studio or Fusion SD webhook waits for the lead's lock before it
 // is held (about 3.4 s in all, inside Dealer Studio's push timeout). A test may
@@ -2527,11 +2548,21 @@ const STORED_EVENTS_TO_SCAN = 10;
 let DEALER_STUDIO_CLAIM_RETRY_DELAYS_MS = [700, 1200, 1500];
 const CLAIM_WAIT_CRM_TYPES = new Set(['DEALER_STUDIO', 'FUSION_SD']);
 
+function storedEventTime(event, resolved) {
+  return pathPolicy.parseTimestamp(resolved.record?.modified_at || resolved.record?.[FUSION_LOST_DETAIL]?.at)
+    || parseProjectDateTime(event.CREATEDTIME)
+    || null;
+}
+
 /**
- * Replays a held dealer update from the newest stored webhook event for that
- * dealer lead that carries a status (newer events may hold only notes). The
- * event that was applied is marked SUCCESS. Returns a held result, writing
- * nothing, when no usable event is stored.
+ * Replays a held dealer update from the stored webhook events of that dealer
+ * lead (OEM review 4.3). Events not yet done (anything but SUCCESS) that carry
+ * a status or a permitted field edit are applied oldest first, by the dealer's
+ * own event time, each marked SUCCESS once applied (the stale-event guard
+ * quarantines one older than what the lead already holds). The first event
+ * that is held again stops the run, keeping the order. With no unfinished
+ * event left, the newest event carrying a status is applied, as before.
+ * Returns a held result, writing nothing, when no usable event is stored.
  */
 async function replayInboundLeadFromStoredEvent(
   catalystApp, integration, externalLeadId, zohoCrmService = oemCrmService, { replay = true } = {}
@@ -2544,6 +2575,8 @@ async function replayInboundLeadFromStoredEvent(
     getStatusMappings(catalystApp, integration.ROWID),
   ]);
 
+  // Newest first, as read.
+  const candidates = [];
   for (const wrapped of rows) {
     const event = wrapped[WEBHOOK_EVENTS_TABLE];
     if (!event.payload_encrypted) continue;
@@ -2556,11 +2589,16 @@ async function replayInboundLeadFromStoredEvent(
     }
     if (!payload || typeof payload !== 'object') continue;
     const resolved = resolveInboundRecord(integration, payload, fieldMappings);
-    if (String(resolved.externalLeadId || '') !== String(externalLeadId) || !resolved.hasStatus) continue;
+    if (String(resolved.externalLeadId || '') !== String(externalLeadId)) continue;
+    if (!resolved.hasStatus && !resolved.hasFieldEdits) continue;
+    candidates.push({ event, resolved, at: storedEventTime(event, resolved) });
+  }
 
+  const apply = async ({ event, resolved }) => {
     const result = await processResolvedInboundLead(
       catalystApp, integration, externalLeadId, resolved.record,
-      fieldMappings, statusMappings, crypto.randomUUID(), zohoCrmService, null, { replay }
+      [...fieldMappings, ...(resolved.syntheticMappings || [])], statusMappings,
+      crypto.randomUUID(), zohoCrmService, null, { replay }
     );
     if (!result?.held || result?.terminal) {
       try {
@@ -2571,7 +2609,38 @@ async function replayInboundLeadFromStoredEvent(
       }
     }
     return result;
+  };
+
+  const unfinished = candidates
+    .filter(({ event }) => event.processing_status !== 'SUCCESS')
+    .sort((a, b) => (a.at?.getTime() ?? 0) - (b.at?.getTime() ?? 0));
+  if (unfinished.length > 0) {
+    // The net change, not every step: a status-only event that a newer
+    // unfinished status supersedes is closed without being applied, so an
+    // intermediate status is never written to MG on the way.
+    const newestStatusAt = Math.max(...unfinished
+      .filter(({ resolved }) => resolved.hasStatus)
+      .map(({ at }) => at?.getTime() ?? 0));
+    let result;
+    for (const candidate of unfinished) {
+      const superseded = candidate.resolved.hasStatus && !candidate.resolved.hasFieldEdits
+        && (candidate.at?.getTime() ?? 0) < newestStatusAt;
+      if (superseded) {
+        try {
+          await markWebhookEventStatus(catalystApp, candidate.event.ROWID, 'SUCCESS', 'TERMINAL:SUPERSEDED');
+        } catch (err) {
+          logger.error('crmIntegrationService', `Could not close superseded stored webhook event ${candidate.event.ROWID}`, err);
+        }
+        continue;
+      }
+      result = await apply(candidate);
+      if (result?.held && !result?.terminal) return result;
+    }
+    return result;
   }
+
+  const newestWithStatus = candidates.find(({ resolved }) => resolved.hasStatus);
+  if (newestWithStatus) return apply(newestWithStatus);
   return { skipped: true, held: true, reason: 'NO_STORED_EVENT' };
 }
 
@@ -2806,7 +2875,100 @@ function isCurrentOutboundStatus(mgStatus, dealerStatus, statusMappings) {
   }
 }
 
+// How far ahead of this server's clock a dealer's event time may be and still
+// be trusted as an ordering key and a business date.
+const EVENT_TIME_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
+
+/**
+ * When the dealer's change happened, as the event states it: Zoho's
+ * Modified_Time, Fusion's pushed_at (kept as modified_at, or on the Lost detail)
+ * or Dealer Studio's updated_at (modified_at). Null when absent, unreadable or
+ * implausibly in the future.
+ */
+function inboundEventTime(externalRecord) {
+  const raw = externalRecord?.Modified_Time || externalRecord?.modified_at || externalRecord?.[FUSION_LOST_DETAIL]?.at;
+  const at = pathPolicy.parseTimestamp(raw);
+  if (!at || at.getTime() > Date.now() + EVENT_TIME_FUTURE_TOLERANCE_MS) return null;
+  return at;
+}
+
+/** The mapping's last applied inbound event time, read inside the lead lock; null when none or no column. */
+async function lastAppliedInboundEventTime(catalystApp, mappingRowId) {
+  try {
+    const rows = await catalystApp.zcql().executeZCQLQuery(
+      `SELECT * FROM ${LEAD_INTEGRATIONS_TABLE} WHERE ROWID = ${Number(mappingRowId)} LIMIT 1`
+    );
+    return pathPolicy.parseTimestamp(rows[0]?.[LEAD_INTEGRATIONS_TABLE]?.last_inbound_event_at);
+  } catch (err) {
+    logger.error('crmIntegrationService', `Could not read the last applied event time of mapping ${mappingRowId}; ordering not checked`, err);
+    return null;
+  }
+}
+
+/** Moves the marker forward only. Best effort: a missing column is logged once per call, never fatal. */
+async function recordAppliedInboundEventTime(catalystApp, mappingRowId, eventAt, previous) {
+  if (!eventAt || (previous && previous >= eventAt)) return;
+  try {
+    await catalystApp.datastore().table(LEAD_INTEGRATIONS_TABLE).updateRow({
+      ROWID: mappingRowId,
+      last_inbound_event_at: toCatalystDateTime(eventAt),
+    });
+  } catch (err) {
+    logger.error(
+      'crmIntegrationService',
+      `Could not record the applied event time on mapping ${mappingRowId} (does lead_integrations.last_inbound_event_at exist?)`,
+      err
+    );
+  }
+}
+
+/**
+ * Runs inside the lead's mutation lock (OEM review 4.2). An event older than
+ * the last one applied to this lead is quarantined, not applied: a late or
+ * replayed "Lost" must not overwrite a newer "Prospect Lost". An event with no
+ * readable time is applied as before but never moves the marker. Every event
+ * that is evaluated without being held moves the marker forward.
+ */
 async function attemptInboundLeadUpdate(
+  catalystApp, integration, externalLeadId, externalRecord,
+  fieldMappings, statusMappings, requestReference, zohoCrmService,
+  affectedFields, replay, mapping
+) {
+  const guard = isInboundStaleEventGuardEnabled() && mapping?.ROWID;
+  const eventAt = guard ? inboundEventTime(externalRecord) : null;
+  const lastApplied = eventAt ? await lastAppliedInboundEventTime(catalystApp, mapping.ROWID) : null;
+  if (eventAt && lastApplied && eventAt < lastApplied) {
+    logger.info(
+      'crmIntegrationService',
+      `Stale event for lead ${mapping.zoho_lead_id} (dealer ${integration.dealer_code}): event ${eventAt.toISOString()} is older than the last applied ${lastApplied.toISOString()}; not applied`
+    );
+    await writeLog(catalystApp, {
+      integration_id: integration.ROWID,
+      dealer_code: integration.dealer_code,
+      direction: 'EXTERNAL_CRM_TO_ZOHO',
+      operation: 'UPDATE_LEAD',
+      zoho_lead_id: mapping.zoho_lead_id,
+      external_lead_id: externalLeadId,
+      status: 'SKIPPED',
+      error_message: 'STALE_EVENT',
+      request_reference: requestReference,
+      field_changes: JSON.stringify([{ field: 'event_time', event_at: eventAt.toISOString(), last_applied_at: lastApplied.toISOString() }]),
+    }, { scenarioMessage: 'Older dealer event not applied over a newer one' });
+    return { skipped: true, terminal: true, reason: 'STALE_EVENT' };
+  }
+
+  const result = await attemptInboundLeadUpdateCore(
+    catalystApp, integration, externalLeadId, externalRecord,
+    fieldMappings, statusMappings, requestReference, zohoCrmService,
+    affectedFields, replay, mapping
+  );
+  if (eventAt && !result?.held) {
+    await recordAppliedInboundEventTime(catalystApp, mapping.ROWID, eventAt, lastApplied);
+  }
+  return result;
+}
+
+async function attemptInboundLeadUpdateCore(
   catalystApp, integration, externalLeadId, externalRecord,
   fieldMappings, statusMappings, requestReference, zohoCrmService,
   affectedFields, replay, mapping
@@ -3234,7 +3396,9 @@ async function attemptInboundLeadUpdate(
 
   const zohoApiFields = {
     ...toZohoApiFields(internalUpdate),
-    ...(await leadActivityDateFields(zohoCrmService, mapping.zoho_lead_id, internalUpdate)),
+    // A replayed event dates the action when it happened, not when it is
+    // processed (OEM review 4.2).
+    ...(await leadActivityDateFields(zohoCrmService, mapping.zoho_lead_id, internalUpdate, inboundEventTime(externalRecord) || new Date())),
     ...(internalUpdate.lead_status === 'Lost Lead' ? fusionLostReasonFields(externalRecord?.[FUSION_LOST_DETAIL]) : {}),
   };
   if (zohoApiFields.Reason_for_Lost) fieldChanges.push(lostReasonChange(externalRecord[FUSION_LOST_DETAIL], zohoApiFields));
@@ -3288,8 +3452,8 @@ async function attemptInboundLeadUpdate(
         last_error: conflicts.length > 0 ? 'OWNERSHIP_CONFLICT' : '',
       }),
     });
-    // A dealer change reached MG: the dealer acted (Batch 7).
-    await stampDealerActionClock(catalystApp, mapping.ROWID);
+    // A dealer change reached MG: the dealer acted (Batch 7), at the event's time.
+    await stampDealerActionClock(catalystApp, mapping.ROWID, inboundEventTime(externalRecord) || new Date());
 
     // FUSION_CHANGES_ONLY_PATCH (Batch 10, field ownership): Fusion already
     // holds what the dealer just changed, so record it as sent; a later MG
@@ -3460,7 +3624,49 @@ const MAX_STORED_PAYLOAD_LENGTH = 10000;
 // also names the status enquiryStatus and the id leadId (28 Oct 2026).
 const FUSION_REPLAY_FIELDS = ['lead_id', 'leadId', 'dealer_id', 'status', 'enquiryStatus', 'pushed_at', 'lostReason', 'lostSubReason'];
 
-function payloadToStore(integration, rawBody) {
+// Version of the stored copy: 2 also keeps the dealer's permitted field edits
+// (OEM review 4.3), so an edit-only event can be replayed. Version 1 copies
+// (status fields only) are still read.
+const STORED_PAYLOAD_VERSION = 2;
+
+function readPath(body, path) {
+  if (Object.prototype.hasOwnProperty.call(body, path)) return { found: true, value: body[path], flat: true };
+  let current = body;
+  for (const part of String(path).split('.')) {
+    if (current === null || typeof current !== 'object' || !Object.prototype.hasOwnProperty.call(current, part)) return { found: false };
+    current = current[part];
+  }
+  return { found: true, value: current, flat: false };
+}
+
+function writePath(target, path, value) {
+  const parts = String(path).split('.');
+  let current = target;
+  for (const part of parts.slice(0, -1)) {
+    if (!current[part] || typeof current[part] !== 'object') current[part] = {};
+    current = current[part];
+  }
+  current[parts.at(-1)] = value;
+}
+
+/**
+ * The dotted paths of the field edits this Fusion dealer may send back
+ * (FUSION_INBOUND_EDIT_FIELDS, as the dealer's own map names them). These are
+ * kept in the stored copy beside the status fields.
+ */
+async function storedEditPaths(catalystApp, integration) {
+  if (integration?.crm_type !== 'FUSION_SD' || !isFusionInboundV2Enabled()) return [];
+  try {
+    const editable = new Set(getFusionInboundEditFields());
+    const mappings = await getFieldMappings(catalystApp, integration.ROWID);
+    return mappings.filter((m) => editable.has(m.source_field) && m.target_field).map((m) => m.target_field);
+  } catch (err) {
+    logger.error('crmIntegrationService', `Could not read the editable fields of integration ${integration.ROWID}; the event is stored with its status fields only`, err);
+    return [];
+  }
+}
+
+function payloadToStore(integration, rawBody, editPaths = []) {
   const text = Buffer.isBuffer(rawBody) ? rawBody.toString('utf8') : String(rawBody);
   if (!isFusionInboundV2Enabled()) return text;
   try {
@@ -3468,19 +3674,29 @@ function payloadToStore(integration, rawBody) {
     if (!body || typeof body !== 'object' || Array.isArray(body)) return text;
     // Any other status-like field is kept too, so a renamed status can still
     // be replayed once it is read (28 Oct 2026).
-    return JSON.stringify(Object.fromEntries(
+    const stored = Object.fromEntries(
       Object.keys(body)
         .filter((field) => FUSION_REPLAY_FIELDS.includes(field) || /status/i.test(field))
         .map((field) => [field, body[field]])
-    ));
+    );
+    // The permitted field edits, at the same paths, so replay reads them as
+    // the live webhook does. Nothing else of the body is kept.
+    for (const path of editPaths) {
+      const found = readPath(body, path);
+      if (!found.found) continue;
+      if (found.flat) stored[path] = found.value;
+      else writePath(stored, path, found.value);
+    }
+    stored._store_version = STORED_PAYLOAD_VERSION;
+    return JSON.stringify(stored);
   } catch {
     return text;
   }
 }
 
-function durableEventColumns(integration, rawBody, externalLeadId) {
+function durableEventColumns(integration, rawBody, externalLeadId, editPaths = []) {
   try {
-    const encrypted = integrationAuthService.encrypt(payloadToStore(integration, rawBody));
+    const encrypted = integrationAuthService.encrypt(payloadToStore(integration, rawBody, editPaths));
     if (encrypted.length > MAX_STORED_PAYLOAD_LENGTH) {
       logger.info(
         'crmIntegrationService',
@@ -3543,7 +3759,10 @@ async function claimRepeatedWebhookEvent(catalystApp, dedupeKey, durable = true)
     'crmIntegrationService',
     `Webhook event ${dedupeKey} was ${existing.processing_status}; processing it again`
   );
-  return { isDuplicate: false, eventRowId: existing.ROWID, reprocessed: true };
+  return {
+    isDuplicate: false, eventRowId: existing.ROWID, reprocessed: true,
+    ...(durable ? { replayable: Boolean(existing.payload_encrypted) } : {}),
+  };
 }
 
 async function checkAndRecordWebhookEvent(catalystApp, integration, rawBody, eventId, { externalLeadId = null } = {}) {
@@ -3567,11 +3786,17 @@ async function checkAndRecordWebhookEvent(catalystApp, integration, rawBody, eve
   };
   const table = catalystApp.datastore().table(WEBHOOK_EVENTS_TABLE);
 
-  const durable = usesInboundEventStore(integration) ? durableEventColumns(integration, rawBody, externalLeadId) : null;
+  // `replayable` (OEM review 4.3): null when this dealer does not use the
+  // event store; otherwise whether a decryptable copy was stored, so the route
+  // never acknowledges deferred work it could not recover.
+  const storeRequired = usesInboundEventStore(integration);
+  const durable = storeRequired
+    ? durableEventColumns(integration, rawBody, externalLeadId, await storedEditPaths(catalystApp, integration))
+    : null;
   if (durable) {
     try {
       const inserted = await table.insertRow({ ...row, ...durable });
-      return { isDuplicate: false, eventRowId: inserted.ROWID };
+      return { isDuplicate: false, eventRowId: inserted.ROWID, replayable: Boolean(durable.payload_encrypted) };
     } catch (err) {
       if (isDuplicateConstraintError(err)) {
         return claimRepeatedWebhookEvent(catalystApp, dedupeKey);
@@ -3587,10 +3812,11 @@ async function checkAndRecordWebhookEvent(catalystApp, integration, rawBody, eve
 
   try {
     const inserted = await table.insertRow(row);
-    return { isDuplicate: false, eventRowId: inserted.ROWID };
+    return { isDuplicate: false, eventRowId: inserted.ROWID, replayable: storeRequired ? false : null };
   } catch (err) {
     if (isDuplicateConstraintError(err)) {
-      return claimRepeatedWebhookEvent(catalystApp, dedupeKey, false);
+      const repeated = await claimRepeatedWebhookEvent(catalystApp, dedupeKey, false);
+      return storeRequired && repeated && !('replayable' in repeated) ? { ...repeated, replayable: false } : repeated;
     }
 
     throw err;

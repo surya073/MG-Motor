@@ -91,3 +91,77 @@ test('a webhook with a wrong token is rejected before any sync work', async (t) 
   assert.equal(response.status, 401);
   assert.equal(gets.length, 0);
 });
+
+// OEM review 4.5: an authenticated notification's outcome is reported apart
+// from receipt, with the failed record ids, in one structured log line that
+// carries no token or customer data.
+test('crm-notify reports processed / unchanged / partial / failed separately, with failed ids, in a structured log line', async (t) => {
+  const leadSyncService = require('../services/leadSyncService');
+  const logger = require('../utils/logger');
+  t.mock.method(catalyst, 'initialize', () => fakeCatalystApp());
+  const lines = [];
+  t.mock.method(logger, 'info', (ctx, msg) => lines.push(String(msg)));
+  t.mock.method(logger, 'error', (ctx, msg) => lines.push(String(msg)));
+  const results = [
+    { status: 'Success', recordsInserted: 0, recordsUpdated: 2, recordsFailed: 0, errors: [] },
+    { status: 'Success', recordsInserted: 0, recordsUpdated: 0, recordsFailed: 0, recordsUnchanged: 1, errors: [] },
+    { status: 'Partial', recordsInserted: 1, recordsUpdated: 0, recordsFailed: 1, errors: [{ crm_record_id: '222', error: 'x' }] },
+    { status: 'Failed', recordsInserted: 0, recordsUpdated: 0, recordsFailed: 2, errors: [{ crm_record_id: '111', error: 'x' }, { crm_record_id: '222', error: 'y' }] },
+  ];
+  t.mock.method(leadSyncService, 'syncLeadsByIds', async () => results.shift());
+
+  // The route captured syncLeadsByIds at require time; load a fresh copy that sees the mock.
+  delete require.cache[require.resolve('../routes/webhookRoutes')];
+  const server = await startServer();
+  t.after(() => { server.close(); delete require.cache[require.resolve('../routes/webhookRoutes')]; });
+
+  const send = () => post(server, { token: 'route-test-token', module: 'Leads', ids: ['111', '222'], operation: 'update', channel_id: 1795050009311 });
+  const processed = await send();
+  const unchanged = await send();
+  const partial = await send();
+  const failed = await send();
+
+  assert.deepEqual([processed, unchanged, partial, failed].map((r) => [r.status, r.json.outcome]),
+    [[200, 'processed'], [200, 'unchanged'], [200, 'partial'], [200, 'failed']]);
+  assert.deepEqual(partial.json.failedIds, ['222']);
+  assert.deepEqual(failed.json.failedIds, ['111', '222']);
+
+  const structured = lines.filter((l) => l.startsWith('{"event":"crm_notify"')).map((l) => JSON.parse(l));
+  assert.equal(structured.length, 4);
+  assert.deepEqual(structured.map((l) => l.outcome), ['processed', 'unchanged', 'partial', 'failed']);
+  for (const line of structured) {
+    assert.equal(line.channelId, '1795050009311');
+    assert.equal(line.module, 'Leads');
+    assert.equal(line.operation, 'update');
+    assert.equal(line.records, 2);
+    assert.ok('cid' in line && 'project' in line && 'environment' in line);
+  }
+  assert.deepEqual(structured[3].failedIds, ['111', '222']);
+  assert.ok(lines.every((l) => !l.includes('route-test-token')), 'the token is never logged');
+});
+
+test('crm-notify: a rejected token and an unhandled module are logged as such; a coalesced Dealers sync is deferred (202)', async (t) => {
+  const dealerSyncService = require('../services/dealerSyncService');
+  const logger = require('../utils/logger');
+  t.mock.method(catalyst, 'initialize', () => fakeCatalystApp());
+  const lines = [];
+  t.mock.method(logger, 'info', (ctx, msg) => lines.push(String(msg)));
+  t.mock.method(logger, 'error', (ctx, msg) => lines.push(String(msg)));
+  t.mock.method(dealerSyncService, 'syncDealersCoalesced', async () => ({ skipped: true, reason: 'OPERATION_ALREADY_RUNNING', pending: true }));
+  delete require.cache[require.resolve('../routes/webhookRoutes')];
+  const server = await startServer();
+  t.after(() => { server.close(); delete require.cache[require.resolve('../routes/webhookRoutes')]; });
+
+  const rejected = await post(server, { token: 'wrong', module: 'Leads', channel_id: 5 });
+  const ignored = await post(server, { token: 'route-test-token', module: 'Contacts' });
+  const deferred = await post(server, { token: 'route-test-token', module: 'Dealers' });
+
+  assert.equal(rejected.status, 401);
+  assert.equal(ignored.status, 202);
+  assert.equal(ignored.json.outcome, 'ignored');
+  assert.equal(deferred.status, 202);
+  assert.equal(deferred.json.outcome, 'deferred');
+  const outcomes = lines.filter((l) => l.startsWith('{"event":"crm_notify"')).map((l) => JSON.parse(l).outcome);
+  assert.deepEqual(outcomes, ['rejected', 'ignored', 'deferred']);
+  assert.ok(lines.every((l) => !l.includes('"wrong"') && !l.includes('route-test-token')));
+});

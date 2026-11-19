@@ -2,7 +2,7 @@
 
 const logger = require('../../utils/logger');
 const { parseProjectDateTime } = require('../../utils/projectTime');
-const { getInboundReplayIdleSkipMinutes } = require('../../config/env');
+const { getInboundReplayIdleSkipMinutes, isInboundEventStoreEnabled } = require('../../config/env');
 const crmIntegrationService = require('./crmIntegrationService');
 const crmAdapterFactory = require('./crmAdapterFactory');
 const { guardSweep } = require('./sweepOverlapGuard');
@@ -372,7 +372,7 @@ function sweepWasIdle(results) {
     'failed', 'dealerBudgetExhausted', 'deferred'].every((key) => !results[key]);
 }
 
-async function runInboundReplaySweepInternal(catalystApp, { deadline, windowSequence } = {}) {
+async function runLogDrivenReplay(catalystApp, { deadline, windowSequence } = {}, replayedKeys = new Set()) {
   if (budgetSpent(deadline)) return { skipped: true, reason: 'WORK_BUDGET_EXHAUSTED', deferredUnknown: true };
   // One count decides the path. Fewer held rows than one read returns: read them all and
   // look up only their own dealers. Otherwise exclude every removed dealer in the query.
@@ -625,6 +625,7 @@ async function runInboundReplaySweepInternal(catalystApp, { deadline, windowSequ
       }
 
       results.attempted += 1;
+      replayedKeys.add(`${integrationId}:${externalLeadId}`);
       replaysByDealer.set(integrationId, (replaysByDealer.get(integrationId) || 0) + 1);
       const replay = fromStoredEvents
         ? await crmIntegrationService.replayInboundLeadFromStoredEvent(
@@ -711,8 +712,117 @@ async function runInboundReplaySweepInternal(catalystApp, { deadline, windowSequ
   return results;
 }
 
+const WEBHOOK_EVENTS_TABLE = 'webhook_events';
+const STORED_EVENT_SCAN_ROWS = 100;
+// A stored event still unfinished after this long is no longer retried here
+// (it stays in the table for review and retention).
+const STORED_EVENT_GIVE_UP_MS = 7 * 24 * 60 * 60 * 1000;
+
+function parseUtcColumn(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const parsed = new Date(`${raw.replace(' ', 'T').slice(0, 19)}Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isTrue(value) {
+  return !(value === false || value === 0 || String(value).toLowerCase() === 'false' || String(value) === '0');
+}
+
+/**
+ * OEM review 4.3: the log-driven sweep above finds a held event only through
+ * a FAILED integration_logs row, so a stored event left PENDING, FAILED or
+ * abandoned (RECEIVED, lease expired) without such a row was never retried.
+ * This reads the unfinished stored events themselves and replays each dealer
+ * lead once (replayInboundLeadFromStoredEvent applies them in event order),
+ * leaving out leads the log-driven sweep already replayed this run. Each event
+ * backs off like a held log row (half its age, 2-60 minutes) and is given up
+ * after STORED_EVENT_GIVE_UP_MS.
+ */
+async function replayUnfinishedStoredEvents(catalystApp, { deadline, skip = new Set(), budget = MAX_REPLAYS_PER_SWEEP, now = Date.now() } = {}) {
+  const out = { scanned: 0, leads: 0, attempted: 0, recovered: 0, stillHeld: 0, backedOff: 0, abandoned: 0, failed: 0 };
+  if (budget <= 0) return out;
+  const rows = await catalystApp.zcql().executeZCQLQuery(
+    `SELECT * FROM ${WEBHOOK_EVENTS_TABLE} WHERE processing_status IN ('PENDING', 'FAILED', 'RECEIVED') ORDER BY CREATEDTIME ASC LIMIT ${STORED_EVENT_SCAN_ROWS}`
+  );
+  out.scanned = rows.length;
+
+  const groups = new Map();
+  for (const wrapped of rows) {
+    const event = wrapped[WEBHOOK_EVENTS_TABLE];
+    if (!event?.integration_id || !event.external_lead_id || !event.payload_encrypted) continue;
+    const created = parseSystemTimestamp(event.CREATEDTIME);
+    if (created && now - created.getTime() > STORED_EVENT_GIVE_UP_MS) {
+      out.abandoned += 1;
+      continue;
+    }
+    if (event.processing_status === 'RECEIVED') {
+      // Still being processed under a live lease, or a row with no lease at all.
+      const lease = parseUtcColumn(event.lease_until);
+      if (!lease || lease.getTime() > now) continue;
+    }
+    const key = `${event.integration_id}:${event.external_lead_id}`;
+    if (skip.has(key) || groups.has(key)) continue;
+    const waitedMinutes = created ? Math.max(0, (now - created.getTime()) / 60000) : 0;
+    if (!isReplayDue(event, waitedMinutes, now)) {
+      out.backedOff += 1;
+      continue;
+    }
+    groups.set(key, { integrationId: String(event.integration_id).replace(/\D/g, ''), externalLeadId: event.external_lead_id });
+  }
+  out.leads = groups.size;
+
+  const integrations = new Map();
+  for (const { integrationId, externalLeadId } of groups.values()) {
+    if (out.attempted >= budget || budgetSpent(deadline)) break;
+    if (!integrationId) continue;
+    if (!integrations.has(integrationId)) {
+      const found = await catalystApp.zcql().executeZCQLQuery(
+        `SELECT * FROM ${DEALER_INTEGRATIONS_TABLE} WHERE ROWID = ${integrationId} LIMIT 1`
+      );
+      integrations.set(integrationId, found[0]?.[DEALER_INTEGRATIONS_TABLE] || null);
+    }
+    const integration = integrations.get(integrationId);
+    if (!integration || !isTrue(integration.inbound_enabled)
+      || !crmIntegrationService.canReplayFromStoredEvents(integration)) continue;
+    out.attempted += 1;
+    try {
+      const replay = await crmIntegrationService.replayInboundLeadFromStoredEvent(
+        catalystApp, integration, externalLeadId, undefined, { replay: true }
+      );
+      if (!replay?.held || replay?.terminal) out.recovered += 1;
+      else out.stillHeld += 1;
+    } catch (err) {
+      out.failed += 1;
+      logger.error('inboundReplayScheduler', `Stored-event replay failed for dealer record ${externalLeadId} (integration ${integrationId})`, err);
+    }
+  }
+  return out;
+}
+
+async function runInboundReplaySweepInternal(catalystApp, options = {}) {
+  const replayedKeys = new Set();
+  const results = await runLogDrivenReplay(catalystApp, options, replayedKeys);
+  if (!isInboundEventStoreEnabled() || budgetSpent(options.deadline)) return results;
+  try {
+    const storedEvents = await replayUnfinishedStoredEvents(catalystApp, {
+      deadline: options.deadline,
+      skip: replayedKeys,
+      budget: MAX_REPLAYS_PER_SWEEP - (results.attempted || 0),
+    });
+    if (storedEvents.attempted > 0) logger.info('inboundReplayScheduler', `Stored-event pass: ${JSON.stringify(storedEvents)}`);
+    return { ...results, storedEvents };
+  } catch (err) {
+    logger.error('inboundReplayScheduler', 'Stored-event replay pass failed', err);
+    return { ...results, storedEvents: { error: err.message } };
+  }
+}
+
 // Guarded against re-entrant overlap on the same warm instance — see
 // sweepOverlapGuard.js. Exported name/signature unchanged.
 const runInboundReplaySweep = guardSweep('inboundReplaySweep', withMappingCache(runInboundReplaySweepInternal));
 
-module.exports = { runInboundReplaySweep, _test: { parseSystemTimestamp, selectReplayCandidates, HEAD_ROWS, TAIL_ROWS, resetIdleMemo } };
+module.exports = {
+  runInboundReplaySweep,
+  _test: { parseSystemTimestamp, selectReplayCandidates, HEAD_ROWS, TAIL_ROWS, resetIdleMemo, replayUnfinishedStoredEvents },
+};
