@@ -169,11 +169,12 @@ function getSharedWebhookConfig() {
 }
 
 /**
- * FUSION_UNSIGNED_WEBHOOK_DEALER_CODES (comma-separated MG dealer codes): Fusion
- * SD dealers whose webhooks are accepted WITHOUT a signature (MG decision,
- * 20 Nov 2026: Hillcrest 411802, Indooroopilly 406802). Their posts are not
- * checked against any secret, so anyone who knows the dealer's URL can post
- * for it. Every other Fusion dealer still must sign. Lowercased; read on every call.
+ * FUSION_UNSIGNED_WEBHOOK_DEALER_CODES (comma-separated MG dealer codes, or `*`
+ * for every Fusion SD dealer): Fusion SD dealers whose webhooks are accepted
+ * WITHOUT a signature (MG decision, 20 Nov 2026: first Hillcrest 411802 and
+ * Indooroopilly 406802, then all Fusion dealers). Their posts are not checked
+ * against any secret, so anyone who knows the dealer's URL can post for it.
+ * A Fusion dealer not covered must still sign. Lowercased; read on every call.
  */
 function getFusionUnsignedWebhookDealerCodes() {
   return new Set(

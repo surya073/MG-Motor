@@ -24,8 +24,9 @@ const UNSIGNED_METHOD = 'FUSION_UNSIGNED';
 const UNSIGNED_FINGERPRINT = signingSecretFingerprint('unsigned-by-mg-config');
 
 function isUnsignedDealer(integration) {
-  return integration?.crm_type === 'FUSION_SD' &&
-    getFusionUnsignedWebhookDealerCodes().has(String(integration?.dealer_code || '').trim().toLowerCase());
+  if (integration?.crm_type !== 'FUSION_SD') return false;
+  const codes = getFusionUnsignedWebhookDealerCodes();
+  return codes.has('*') || codes.has(String(integration?.dealer_code || '').trim().toLowerCase());
 }
 
 function quote(value) { return String(value).replace(/'/g, "''"); }

@@ -52,6 +52,14 @@ test('with the setting unset, Hillcrest must sign again', async (t) => {
   assert.deepEqual(await verify(HILLCREST), { ok: false, reason: 'MISSING_AUTH' });
 });
 
+test('`*` covers every Fusion dealer, but never a dealer on another CRM', async (t) => {
+  setup(t, '*');
+  assert.equal((await verify(OTHER)).ok, true);
+  assert.equal((await verify(HILLCREST)).ok, true);
+  const zoho = await verify({ ROWID: '2000', dealer_code: 'AU008', crm_type: 'ZOHO_CRM', webhook_enabled: true });
+  assert.equal(zoho.ok, false);
+});
+
 test('a disabled webhook stays disabled for a listed dealer', async (t) => {
   setup(t);
   assert.deepEqual(await verify({ ...HILLCREST, webhook_enabled: false }), { ok: false, reason: 'WEBHOOK_DISABLED' });
