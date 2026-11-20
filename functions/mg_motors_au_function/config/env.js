@@ -57,32 +57,6 @@ function getPublicFunctionBaseUrl() {
   return url.toString().replace(/\/+$/, '');
 }
 
-/**
- * OEM_WATCH_REGISTRATION_ENABLED=true lets this project register and renew the
- * OEM CRM watch channel (cron /cron/renew-webhook, admin /admin/register-webhook).
- * Off by default. The OEM Zoho org keeps ONE watch subscription per OAuth user,
- * and the trial and MG projects share those credentials, so any other project
- * running this code would take the subscription (notify URL and token) away
- * from the owning project. Set it to true only in the project that owns the
- * OEM webhook. Dealer watch channels are not affected. Read on every call.
- */
-function isOemWatchRegistrationEnabled() {
-  return String(process.env.OEM_WATCH_REGISTRATION_ENABLED || '').trim().toLowerCase() === 'true';
-}
-
-/**
- * LEAD_EXCHANGE_OWNER_PROJECT_ID: the Catalyst project id that owns every write
- * to the OEM CRM, to dealer CRMs and to Zoho watch channels (OEM review
- * 19 Nov 2026, 4.4). When set, a project whose runtime id differs (or is
- * unknown) writes nothing, so a second project running this code (the trial)
- * cannot mutate shared systems. Unset: no restriction, as before. Digits only;
- * anything else is treated as unset. Read on every call.
- */
-function getWriteOwnerProjectId() {
-  const raw = String(process.env.LEAD_EXCHANGE_OWNER_PROJECT_ID || '').trim();
-  return /^\d+$/.test(raw) ? raw : null;
-}
-
 function boundedMinutes(name, fallback, min, max) {
   const value = Number(String(process.env[name] ?? '').trim());
   if (!Number.isFinite(value) || String(process.env[name] ?? '').trim() === '') return fallback;
@@ -592,8 +566,6 @@ module.exports = {
   isFusionSdNewLeadsOnly,
   getZohoConfig,
   getPublicFunctionBaseUrl,
-  isOemWatchRegistrationEnabled,
-  getWriteOwnerProjectId,
   getOemWatchLifetimeConfig,
   isInboundStaleEventGuardEnabled,
   getIntegrationCredentialsKey,

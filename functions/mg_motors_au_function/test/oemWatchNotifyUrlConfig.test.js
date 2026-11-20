@@ -1,7 +1,6 @@
 'use strict';
 
 // The OEM watch notify URL must come only from PUBLIC_FUNCTION_BASE_URL, and
-// only a project with OEM_WATCH_REGISTRATION_ENABLED=true may register it.
 // A hardcoded fallback once pointed the MG project's channel at the trial
 // project; and the trial and MG projects share one Zoho watch subscription,
 // so a second registering project takes it away from the owner.
@@ -64,22 +63,10 @@ function mockZoho(t) {
   };
 }
 
-test('registration is refused, with no Zoho or Data Store call, unless OEM_WATCH_REGISTRATION_ENABLED=true', async (t) => {
-  for (const flag of [undefined, '', 'false', 'yes', '1']) {
-    withEnv(t, { OEM_WATCH_REGISTRATION_ENABLED: flag, PUBLIC_FUNCTION_BASE_URL: AU_BASE });
-    const { zohoCalls } = mockZoho(t);
-    const app = fakeApp();
-    await assert.rejects(zohoWebhookService.registerWatchChannels(app), { code: 'OEM_WATCH_REGISTRATION_DISABLED' });
-    assert.equal(zohoCalls(), 0, `flag=${flag}: no token, watch or deregistration call`);
-    assert.equal(app.queries.length + app.inserted.length, 0, `flag=${flag}: no Data Store access`);
-    t.mock.restoreAll();
-  }
-});
-
 test('a missing or malformed PUBLIC_FUNCTION_BASE_URL fails before the existing channel is deregistered', async (t) => {
   for (const base of [undefined, '', '   ', 'not a url', 'http://insecure.example/server/f',
     'https://user:pw@host.example/server/f', 'https://host.example/server/f?x=1', 'https://host.example/server/f#x']) {
-    withEnv(t, { OEM_WATCH_REGISTRATION_ENABLED: 'true', PUBLIC_FUNCTION_BASE_URL: base });
+    withEnv(t, { PUBLIC_FUNCTION_BASE_URL: base });
     const { zohoCalls } = mockZoho(t);
     const app = fakeApp();
     await assert.rejects(zohoWebhookService.registerWatchChannels(app), { code: 'PUBLIC_FUNCTION_BASE_URL_INVALID' });
@@ -90,7 +77,7 @@ test('a missing or malformed PUBLIC_FUNCTION_BASE_URL fails before the existing 
 });
 
 test('the registered notify_url is exactly PUBLIC_FUNCTION_BASE_URL + /webhooks/crm-notify, and it is logged without the token', async (t) => {
-  withEnv(t, { OEM_WATCH_REGISTRATION_ENABLED: 'true', PUBLIC_FUNCTION_BASE_URL: `${AU_BASE}/` });
+  withEnv(t, { PUBLIC_FUNCTION_BASE_URL: `${AU_BASE}/` });
   const { watchBodies: bodies } = mockZoho(t);
   const lines = [];
   t.mock.method(logger, 'info', (ctx, msg) => lines.push(String(msg)));

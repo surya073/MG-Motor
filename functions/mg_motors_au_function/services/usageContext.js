@@ -169,7 +169,8 @@ function initialize(catalyst, req) {
   if (!ctx) return app;
   if (storage.getStore() !== ctx) storage.enterWith(ctx);
   // The project and environment this request runs in, from the headers Catalyst
-  // sets (x-zc-projectid / x-zc-environment). Read by writeOwnership.js.
+  // sets (x-zc-projectid / x-zc-environment), for the crm_notify log line
+  // and the webhook_channels ownership columns.
   if (!ctx.catalystProject && app?.config) {
     ctx.catalystProject = {
       projectId: app.config.projectId ? String(app.config.projectId) : null,

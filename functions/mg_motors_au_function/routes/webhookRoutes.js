@@ -10,7 +10,6 @@ const crmIntegrationService = require('../services/integrations/crmIntegrationSe
 const webhookVerificationService = require('../services/integrations/webhookVerificationService');
 const fusionReturnChannelProof = require('../services/integrations/fusionReturnChannelProof');
 const dealerStudioLocationRouting = require('../services/integrations/dealerStudioLocationRouting');
-const writeOwnership = require('../services/writeOwnership');
 const logger = require('../utils/logger');
 const usageContext = require('../services/usageContext');
 
@@ -93,11 +92,11 @@ function syncOutcome(result) {
 // One structured line per notification: who handled it, for which channel and
 // module, and how it ended. No token and no customer data.
 function logNotification(fields) {
-  const { projectId, environment } = writeOwnership.currentProject();
+  const project = usageContext.current()?.catalystProject;
   const line = {
     event: 'crm_notify',
-    project: projectId,
-    environment,
+    project: project?.projectId || null,
+    environment: project?.environment || null,
     cid: usageContext.currentCid(),
     ...fields,
   };

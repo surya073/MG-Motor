@@ -30,7 +30,6 @@ const {
 const { applyDealerStudioPayloadRules } = require('./adapters/dealerStudioPayload');
 const { cachedForRun } = require('./mappingRunCache');
 const sentPayloadSnapshot = require('./sentPayloadSnapshot');
-const writeOwnership = require('../writeOwnership');
 const dealerStatusService = require('./dealerStatusService');
 
 const DEALERS_TABLE = 'dealers';
@@ -846,12 +845,6 @@ function newLeadSkipReason(integration, leadRow) {
 
 async function syncLeadToExternalCrm(catalystApp, integration, leadRow) {
   const zohoLeadId = leadRow.crm_record_id;
-  // A project that does not own writes (OEM review 4.4) sends nothing and
-  // records nothing: no claim, hold, failure or retry.
-  if (!writeOwnership.isWriteOwner()) {
-    logger.info('crmIntegrationService', `Lead ${zohoLeadId} (dealer ${integration.dealer_code}) not pushed: this project is not LEAD_EXCHANGE_OWNER_PROJECT_ID.`);
-    return { skipped: true, reason: 'WRITE_OWNERSHIP_DENIED' };
-  }
   // Every push (new-lead webhook, edits, retry sweep, reconciliation, replay) comes
   // through here. A lead created before this Dealer Studio dealer was connected is
   // never created in Dealer Studio: no hold, alert or retry. One already pushed (it
@@ -1349,8 +1342,6 @@ async function attemptExternalCrmSync(catalystApp, integration, leadRow, zohoLea
     if (integration.crm_type === 'FUSION_SD' && operation === 'UPDATE_LEAD') {
       await keepFusionStatusAhead(catalystApp, payload, fieldMappings, zohoLeadId);
     }
-    // Only the owning project writes to dealer CRMs (OEM review 4.4).
-    writeOwnership.assertWriteOwner(`dealer ${integration.dealer_code}'s CRM`);
     const adapter = crmAdapterFactory.getAdapter(integration.crm_type);
     const enquiryIdFieldMapping = fieldMappings.find(
       (mapping) => mapping.source_field === 'enquiry_id' && mapping.target_field

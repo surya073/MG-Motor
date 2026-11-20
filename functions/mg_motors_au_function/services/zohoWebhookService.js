@@ -2,7 +2,7 @@
 
 const axios = require('axios');
 const {
-  getZohoConfig, getPublicFunctionBaseUrl, isOemWatchRegistrationEnabled, getOemWatchLifetimeConfig,
+  getZohoConfig, getPublicFunctionBaseUrl, getOemWatchLifetimeConfig,
 } = require('../config/env');
 const { getAccessToken } = require('./zohoAuthService');
 const { toCatalystDateTime } = require('../utils/dateFormat');
@@ -15,7 +15,6 @@ const { assertZohoEndpoint } = require('./integrations/adapters/zohoEndpointPoli
 const { assertSafeUrl, safeRequestOptions } = require('./integrations/adapters/safeHttp');
 const operationClaims = require('./integrations/integrationOperationClaimService');
 const pathPolicy = require('./integrations/pathPolicyService');
-const writeOwnership = require('./writeOwnership');
 
 const ZOHO_REQUEST_TIMEOUT_MS = 10000;
 
@@ -245,27 +244,19 @@ async function renewOrCreateChannel({ scopeLabel, apiLabel, watchUrl, accessToke
 }
 
 function ownershipColumns(readBack, notifyUrl, orgId) {
-  const { projectId, environment } = writeOwnership.currentProject();
+  const project = usageContext.current()?.catalystProject;
   return {
     notify_url: String(readBack?.notifyUrl || notifyUrl).slice(0, 255),
     events: (readBack?.events || []).join(',').slice(0, 255),
-    owner_project_id: projectId,
-    owner_environment: environment,
+    owner_project_id: project?.projectId || null,
+    owner_environment: project?.environment || null,
     zoho_org_id: orgId,
   };
 }
 
 async function registerWatchChannelsInternal(catalystApp) {
-  // Both checks run before any Zoho call, so a project that must not own the
-  // OEM subscription (or has no URL configured) changes nothing in Zoho.
-  if (!isOemWatchRegistrationEnabled()) {
-    logger.error('zohoWebhookService', 'OEM watch registration skipped: OEM_WATCH_REGISTRATION_ENABLED is not true in this project; nothing was registered or deregistered');
-    throw Object.assign(new Error(
-      'OEM watch registration is disabled in this project. Set OEM_WATCH_REGISTRATION_ENABLED=true only in the project that owns the OEM webhook.'
-    ), { code: 'OEM_WATCH_REGISTRATION_DISABLED' });
-  }
+  // Built before any Zoho call, so a missing URL changes nothing in Zoho.
   const notifyUrl = buildNotifyUrl();
-  writeOwnership.assertWriteOwner('the OEM watch channel');
   const { apiDomain, webhookToken } = getZohoConfig();
   const watchUrl = await validatedWatchUrl(apiDomain);
 
@@ -311,13 +302,9 @@ async function latestOemChannelRow(catalystApp) {
  * For the frequent fast-recover run (OEM review 4.6): renews the OEM channel
  * once less than OEM_WATCH_RENEW_BEFORE_MINUTES of its life remains, and calls
  * `alert` when it is about to lapse (or has) and could not be renewed, or when
- * Zoho reads it back wrong. A project that does not own the OEM webhook does
- * nothing. Costs one Data Store read when renewal is not due.
+ * Zoho reads it back wrong. Costs one Data Store read when renewal is not due.
  */
 async function ensureOemWatchChannelFresh(catalystApp, { now = new Date(), alert } = {}) {
-  if (!isOemWatchRegistrationEnabled() || !writeOwnership.isWriteOwner()) {
-    return { skipped: true, reason: 'NOT_OEM_WATCH_OWNER' };
-  }
   const { renewBeforeMinutes, alertBelowMinutes } = getOemWatchLifetimeConfig();
   const row = await latestOemChannelRow(catalystApp);
   const expiresAt = pathPolicy.parseTimestamp(row?.expires_at);
@@ -368,7 +355,6 @@ async function registerDealerWatchChannelInternal(catalystApp, integration) {
   // Built before any credential read, so a missing PUBLIC_FUNCTION_BASE_URL
   // leaves the dealer's existing channel untouched.
   const notifyUrl = buildDealerNotifyUrl(integration.dealer_code);
-  writeOwnership.assertWriteOwner(`dealer ${integration.dealer_code}'s watch channel`);
   const accessToken = await getAccessTokenForDealerZoho(catalystApp, integration);
   const webhookSecret = await integrationAuthService.getDecryptedCredential(
     catalystApp, integration.ROWID, 'WEBHOOK_SECRET'

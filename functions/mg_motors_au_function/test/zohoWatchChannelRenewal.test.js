@@ -1,7 +1,6 @@
 'use strict';
 
 process.env.PUBLIC_FUNCTION_BASE_URL = 'https://functions.test.example/server/mg_motors_au_function';
-process.env.OEM_WATCH_REGISTRATION_ENABLED = 'true';
 process.env.ZOHO_CLIENT_ID = process.env.ZOHO_CLIENT_ID || 'test-client-id';
 process.env.ZOHO_CLIENT_SECRET = process.env.ZOHO_CLIENT_SECRET || 'test-client-secret';
 process.env.ZOHO_REFRESH_TOKEN = process.env.ZOHO_REFRESH_TOKEN || 'test-refresh-token';
@@ -36,7 +35,6 @@ test.beforeEach((t) => {
   mockCredentialSnapshot(t);
   resetSweepGuard();
   zohoAuthService._resetForTests();
-  delete process.env.LEAD_EXCHANGE_OWNER_PROJECT_ID;
 });
 
 const oemChannel = (id, url = OEM_URL, hours = 5) => ({
@@ -175,25 +173,6 @@ test('a renewal already holding the durable lease elsewhere is skipped without a
   assert.equal(fake.calls.length, 0);
 });
 
-// ----------------------------------------------------------- write owner
-
-test('a project that is not LEAD_EXCHANGE_OWNER_PROJECT_ID cannot touch the OEM channel', async (t) => {
-  process.env.LEAD_EXCHANGE_OWNER_PROJECT_ID = '818000000022001';
-  const fake = installZohoWatchFake(t, { channels: [oemChannel('1')] });
-  await assert.rejects(
-    () => usageContext.runWithContext({ catalystProject: { projectId: '37148000000359003' } },
-      () => zohoWebhookService.registerWatchChannels(buildWatchCatalystApp())),
-    (err) => err.code === 'WRITE_OWNERSHIP_DENIED'
-  );
-  await assert.rejects(() => zohoWebhookService.registerWatchChannels(buildWatchCatalystApp()), (err) => err.code === 'WRITE_OWNERSHIP_DENIED');
-  assert.equal(fake.calls.length, 0);
-
-  resetSweepGuard();
-  const ok = await usageContext.runWithContext({ catalystProject: { projectId: '818000000022001' } },
-    () => zohoWebhookService.registerWatchChannels(buildWatchCatalystApp()));
-  assert.equal(ok.mode, 'renewed');
-});
-
 // ---------------------------------------------------------- dealer channel
 
 test('dealer channel: renewed in place on the dealer\'s own org; the OEM channel is not touched', async (t) => {
@@ -258,22 +237,6 @@ test('fast-recover check: a failed renewal close to expiry raises an alert; with
   const roomy = buildWatchCatalystApp({ existingRows: [{ channel_id: '1', module_name: 'Dealers,Leads', expires_at: later(4).slice(0, 19).replace('T', ' ') }] });
   await zohoWebhookService.ensureOemWatchChannelFresh(roomy, { alert: async (a) => alerts.push(a) });
   assert.equal(alerts.length, 1, 'no alert while more than OEM_WATCH_EXPIRY_ALERT_MINUTES remain');
-});
-
-test('fast-recover check: a project that does not own the OEM webhook does nothing', async (t) => {
-  const fake = installZohoWatchFake(t);
-  process.env.OEM_WATCH_REGISTRATION_ENABLED = 'false';
-  try {
-    const out = await zohoWebhookService.ensureOemWatchChannelFresh(buildWatchCatalystApp());
-    assert.equal(out.skipped, true);
-  } finally {
-    process.env.OEM_WATCH_REGISTRATION_ENABLED = 'true';
-  }
-  process.env.LEAD_EXCHANGE_OWNER_PROJECT_ID = '818000000022001';
-  const notOwner = await usageContext.runWithContext({ catalystProject: { projectId: '1' } },
-    () => zohoWebhookService.ensureOemWatchChannelFresh(buildWatchCatalystApp()));
-  assert.equal(notOwner.skipped, true);
-  assert.equal(fake.calls.length, 0);
 });
 
 // ------------------------------------------------------------------ helpers

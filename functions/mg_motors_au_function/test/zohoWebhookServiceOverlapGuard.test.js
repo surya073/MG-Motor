@@ -2,7 +2,6 @@
 
 // No built-in notify URL any more; OEM registration is opt-in (config/env.js).
 process.env.PUBLIC_FUNCTION_BASE_URL = process.env.PUBLIC_FUNCTION_BASE_URL || 'https://functions.test.example/server/mg_motors_au_function';
-process.env.OEM_WATCH_REGISTRATION_ENABLED = 'true';
 process.env.ZOHO_CLIENT_ID = process.env.ZOHO_CLIENT_ID || 'test-client-id';
 process.env.ZOHO_CLIENT_SECRET = process.env.ZOHO_CLIENT_SECRET || 'test-client-secret';
 process.env.ZOHO_REFRESH_TOKEN = process.env.ZOHO_REFRESH_TOKEN || 'test-refresh-token';
