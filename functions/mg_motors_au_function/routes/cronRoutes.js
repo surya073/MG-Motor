@@ -11,6 +11,7 @@ const inboundReplayScheduler = require('../services/integrations/inboundReplaySc
 const slaMonitorService = require('../services/integrations/slaMonitorService');
 const dealerReconciliationService = require('../services/integrations/dealerReconciliationService');
 const { backfillOemReferences } = require('../services/integrations/oemReferenceBackfillService');
+const { backfillDealerStudioLostOutcome } = require('../services/integrations/lostOutcomeBackfillService');
 const dailyErrorReportService = require('../services/integrations/dailyErrorReportService');
 const webhookEventRetention = require('../services/integrations/webhookEventRetention');
 const logger = require('../utils/logger');
@@ -183,6 +184,33 @@ router.post('/cron/backfill-oem-references', async (req, res) => {
     res.status(200).json({ success: true, ...result });
   } catch (err) {
     logger.error('cronRoutes', 'OEM reference backfill failed', err);
+    res.status(502).json({ success: false, error: err.message });
+  }
+});
+
+// One-off, idempotent: Dealer Studio leads MG holds as Lost get Enquiry_Outcome =
+// Lost (re-checked live in the OEM CRM first; order outcomes are never replaced).
+// Writes only that OEM field and its mirror. Body (optional): { dealerCodes, dryRun }.
+router.post('/cron/backfill-dealer-studio-lost-outcome', async (req, res) => {
+  const providedSecret = req.headers['x-cron-secret'];
+  if (!providedSecret || providedSecret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+
+  try {
+    const catalystApp = usageContext.initialize(catalyst, req);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const result = await backfillDealerStudioLostOutcome(catalystApp, {
+      dealerCodes: body.dealerCodes,
+      dryRun: body.dryRun === true,
+    });
+    logger.info('cronRoutes', 'Dealer Studio Lost outcome backfill', {
+      dryRun: result.dryRun, candidates: result.candidates,
+      updated: result.updated.length, skipped: result.skipped.length, failed: result.failed.length,
+    });
+    res.status(200).json({ success: true, ...result });
+  } catch (err) {
+    logger.error('cronRoutes', 'Dealer Studio Lost outcome backfill failed', err);
     res.status(502).json({ success: false, error: err.message });
   }
 });
