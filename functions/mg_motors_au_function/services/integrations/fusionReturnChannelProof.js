@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const integrationAuthService = require('./integrationAuthService');
 const logger = require('../../utils/logger');
 const { toCatalystDateTime } = require('../../utils/dateFormat');
+const { getFusionUnsignedWebhookDealerCodes } = require('../../config/env');
 
 const TABLE = 'outbound_sync_claims';
 const METHOD = 'STANDARD_WEBHOOKS';
@@ -14,6 +15,17 @@ function signingSecretFingerprint(secret) {
     .update('mg-lead-exchange:fusion-return-channel:v1:')
     .update(String(secret || '').trim())
     .digest('hex');
+}
+
+// A dealer in FUSION_UNSIGNED_WEBHOOK_DEALER_CODES has no secret to fingerprint:
+// its proof is keyed on this fixed marker instead, so a processed unsigned
+// webhook still proves the return channel for the SLA gate.
+const UNSIGNED_METHOD = 'FUSION_UNSIGNED';
+const UNSIGNED_FINGERPRINT = signingSecretFingerprint('unsigned-by-mg-config');
+
+function isUnsignedDealer(integration) {
+  return integration?.crm_type === 'FUSION_SD' &&
+    getFusionUnsignedWebhookDealerCodes().has(String(integration?.dealer_code || '').trim().toLowerCase());
 }
 
 function quote(value) { return String(value).replace(/'/g, "''"); }
@@ -39,7 +51,7 @@ function matches(row, integration, fingerprint) {
 
 function isSignedSuccess(integration, authResult) {
   return integration?.crm_type === 'FUSION_SD' && integration.ROWID && dealerCode(integration) &&
-    authResult?.ok === true && authResult.method === METHOD &&
+    authResult?.ok === true && (authResult.method === METHOD || authResult.method === UNSIGNED_METHOD) &&
     /^[a-f0-9]{64}$/.test(String(authResult.signingSecretFingerprint || ''));
 }
 
@@ -109,6 +121,10 @@ async function recordVerifiedDuplicate(catalystApp, integration, authResult, eve
 /** Used by the SLA gate. Read failures propagate so the caller fails
  * closed for this dealer. Successful-event retention cannot erase proof. */
 async function getReturnChannelGap(catalystApp, integration) {
+  if (isUnsignedDealer(integration)) {
+    const row = await findProof(catalystApp, integration);
+    return matches(row, integration, UNSIGNED_FINGERPRINT) ? null : 'NO_VERIFIED_WEBHOOK';
+  }
   const secret = await integrationAuthService.getDecryptedCredential(
     catalystApp, integration.ROWID, 'WEBHOOK_SIGNING_SECRET'
   );
@@ -122,4 +138,7 @@ module.exports = {
   recordVerifiedSuccess,
   recordVerifiedDuplicate,
   getReturnChannelGap,
+  isUnsignedDealer,
+  UNSIGNED_METHOD,
+  UNSIGNED_FINGERPRINT,
 };

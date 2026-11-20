@@ -169,6 +169,22 @@ function getSharedWebhookConfig() {
 }
 
 /**
+ * FUSION_UNSIGNED_WEBHOOK_DEALER_CODES (comma-separated MG dealer codes): Fusion
+ * SD dealers whose webhooks are accepted WITHOUT a signature (MG decision,
+ * 20 Nov 2026: Hillcrest 411802, Indooroopilly 406802). Their posts are not
+ * checked against any secret, so anyone who knows the dealer's URL can post
+ * for it. Every other Fusion dealer still must sign. Lowercased; read on every call.
+ */
+function getFusionUnsignedWebhookDealerCodes() {
+  return new Set(
+    (process.env.FUSION_UNSIGNED_WEBHOOK_DEALER_CODES || '')
+      .split(',')
+      .map((code) => code.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+/**
  * Outbound retry and escalation switches (FUSION_REMEDIATION_PLAN.md,
  * Batch 3). Read on every call. Retry classification remains opt-in;
  * fast recovery honors due times by default:
@@ -572,6 +588,7 @@ module.exports = {
   getAiAssistantConfig,
   getLeadSyncSince,
   getSharedWebhookConfig,
+  getFusionUnsignedWebhookDealerCodes,
   getDealerStudioWebhookSecret,
   getOutboundRetryConfig,
   isLeadNamePartsEnabled,

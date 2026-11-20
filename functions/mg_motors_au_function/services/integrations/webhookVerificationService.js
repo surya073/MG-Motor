@@ -3,7 +3,9 @@
 const crypto = require('crypto');
 const logger = require('../../utils/logger');
 const integrationAuthService = require('./integrationAuthService');
-const { signingSecretFingerprint } = require('./fusionReturnChannelProof');
+const {
+  signingSecretFingerprint, isUnsignedDealer, UNSIGNED_METHOD, UNSIGNED_FINGERPRINT,
+} = require('./fusionReturnChannelProof');
 const { getSharedWebhookConfig, getDealerStudioWebhookSecret, isFusionInboundV2Enabled } = require('../../config/env');
 
 /**
@@ -411,6 +413,12 @@ async function verifyWebhook(catalystApp, integration, rawBody, headers) {
   // with FUSION_INBOUND_V2 on, every Fusion request must be signed. A static
   // token cannot replace the signed body and timestamp required by Q19.
   if (integration.crm_type === 'FUSION_SD' && isFusionInboundV2Enabled()) {
+    // MG has switched signing off for these dealers (FUSION_UNSIGNED_WEBHOOK_DEALER_CODES):
+    // accepted without checking any signature or secret, signed or not.
+    if (isUnsignedDealer(integration)) {
+      logger.info('webhookVerificationService', `Unsigned Fusion webhook accepted for integration ${integration.ROWID} (dealer ${integration.dealer_code} is in FUSION_UNSIGNED_WEBHOOK_DEALER_CODES)`);
+      return { ok: true, method: UNSIGNED_METHOD, signingSecretFingerprint: UNSIGNED_FINGERPRINT };
+    }
     return verifyStandardWebhook(catalystApp, integration, rawBody, headers);
   }
 
