@@ -3208,16 +3208,20 @@ async function attemptInboundLeadUpdateCore(
     }
   }
 
-  // A Fusion "Lost" that really moves the lead to Lost Lead closes it, so MG's
-  // Enquiry Outcome becomes "Lost" too (Q29: Lost -> Lost; MG, 17 Nov 2026). An
-  // outcome the lead already holds as an order (Purchase, Fleet, On-Sold) is never
-  // replaced. Only when MG's lead is not already Lost, so an echo or a repeat of a
-  // Lost MG already holds stays a no-change (or a reason-only update).
+  // A Fusion or Dealer Studio "Lost" that really moves the lead to Lost Lead closes
+  // it, so MG's Enquiry Outcome becomes "Lost" too (Q29: Lost -> Lost; MG, 17 Nov
+  // 2026; Dealer Studio the same, 20 Nov 2026). An outcome the lead already holds as
+  // an order (Purchase, Fleet, On-Sold) is never replaced. Only when MG's lead is not
+  // already Lost, so an echo or a repeat of a Lost MG already holds stays a no-change
+  // (or a reason-only update). Dealer Studio re-posts the whole cluster, so a
+  // Completed test drive in the same post gives way to Lost.
+  const dealerStudio = integration.crm_type === 'DEALER_STUDIO';
   if (
-    fusionV2 &&
+    (fusionV2 || dealerStudio) &&
     isStatusSync &&
     mappedUpdate.lead_status === FUSION_LOST_STATUS &&
-    mappedUpdate.enquiry_outcome === undefined &&
+    (mappedUpdate.enquiry_outcome === undefined ||
+      (dealerStudio && mappedUpdate.enquiry_outcome === 'Test Drive')) &&
     !['lost lead', 'lost'].includes(String(existingLeadRow.lead_status ?? '').trim().toLowerCase()) &&
     !FUSION_FINAL_OUTCOMES.has(String(existingLeadRow.enquiry_outcome ?? '').trim().toLowerCase())
   ) {

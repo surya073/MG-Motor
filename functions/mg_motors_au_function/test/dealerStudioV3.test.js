@@ -439,6 +439,32 @@ test('a Lost post writes the mapped Reason_for_Lost, Dealer Studio wording and t
   assert.equal(write.fields.Lost_Date, '2026-11-02');
 });
 
+test('a Lost post also sets MG Enquiry Outcome to Lost, as for Fusion', async (t) => {
+  const harness = harnessFor(t);
+  await receive(harness, { id: 200001, status_type: 'lost', leads: [{ id: DS_LEAD_ID }] });
+  assert.deepEqual(harness.oemWrites, [{ zohoLeadId: 'ZL1', fields: { Lead_Status: 'Lost Lead', Enquiry_Outcome: 'Lost' } }]);
+  assert.equal(harness.db.tables.leads[0].enquiry_outcome, 'Lost');
+});
+
+test('a Lost post with a Completed test drive in the cluster sets the outcome to Lost, not Test Drive', async (t) => {
+  const harness = harnessFor(t);
+  await receive(harness, { id: 200001, status_type: 'lost', test_drives: [{ status: 'Completed' }], leads: [{ id: DS_LEAD_ID }] });
+  assert.equal(harness.oemWrites[0].fields.Enquiry_Outcome, 'Lost');
+  assert.equal(harness.db.tables.leads[0].enquiry_outcome, 'Lost');
+});
+
+test('a Lost post never replaces an order outcome, and a repeat Lost writes no outcome again', async (t) => {
+  for (const outcome of ['Purchase', 'Fleet Order', 'On-Sold Demo']) {
+    const harness = harnessFor(t, { lead: { enquiry_outcome: outcome } });
+    await receive(harness, { id: 200001, status_type: 'lost', leads: [{ id: DS_LEAD_ID }] });
+    assert.equal(Object.hasOwn(harness.oemWrites[0]?.fields || {}, 'Enquiry_Outcome'), false, outcome);
+    assert.equal(harness.db.tables.leads[0].enquiry_outcome, outcome, outcome);
+  }
+  const repeat = harnessFor(t, { lead: { lead_status: 'Lost Lead', enquiry_outcome: 'Lost' } });
+  await receive(repeat, { id: 200001, status_type: 'lost', leads: [{ id: DS_LEAD_ID }] });
+  assert.equal(repeat.oemWrites.some((w) => Object.hasOwn(w.fields, 'Enquiry_Outcome')), false);
+});
+
 test('an unlisted lost reason is recorded as Other with the dealer wording', async (t) => {
   const harness = harnessFor(t);
   await receive(harness, { id: 200001, status_type: 'lost', lost_reason: 'too_expensive', leads: [{ id: DS_LEAD_ID }] });
