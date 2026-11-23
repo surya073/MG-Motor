@@ -1185,8 +1185,8 @@ function mgToday(now = new Date()) {
 
 /**
  * Leads Exchange Activity dates, stamped when a dealer's update is applied to MG:
- *  - First_Action_Date: the first real dealer update (a move back to the initial
- *    "Not Contacted" is not an action);
+ *  - First_Action_Date: the first real dealer action, a status move or an
+ *    enquiry outcome (see isFirstActionUpdate); a plain field edit is not one;
  *  - Test_Drive_Date: when the Enquiry Outcome becomes Test Drive;
  *  - Sold_Date (Closed Date): when the outcome becomes a closing one (see CLOSED_OUTCOMES).
  * Each is written once: skipped if MG already holds a value. Best effort: if MG's
@@ -1196,8 +1196,27 @@ function mgToday(now = new Date()) {
 // lost or outcome not required; a Lost Lead status closes the lead too.
 const CLOSED_OUTCOMES = new Set(['purchase', 'retail order', 'on-sold', 'on-sold demo', 'fleet order', 'lost', 'outcome not required']);
 
+// An outcome that is still open records no action (MG Leads.Enquiry_Outcome).
+const OPEN_ENQUIRY_OUTCOMES = new Set(['', '-none-', '(required)', 'outcome pending', 'no outcome']);
+
+// First Action Date marks a real dealer action on the lead (MG weekly check-in,
+// Nov 2026): a status move such as Contacted, Follow-up or Lost, or an enquiry
+// outcome such as Test Drive or Purchase. A plain field edit, such as fixing a
+// name, phone number or model, is not an action. Neither is a status that still
+// means waiting for the dealer (Not Contacted, Update Pending) or an MG-only one.
+function isFirstActionUpdate(internalUpdate) {
+  const update = internalUpdate || {};
+  const status = String(update.lead_status ?? '').trim();
+  const statusAction = status !== ''
+    && status.toLowerCase() !== '-none-'
+    && !pathPolicy.isWaitingForDealerActionStatus(status)
+    && !pathPolicy.isOemOnlyStatus(status);
+  const outcomeAction = !OPEN_ENQUIRY_OUTCOMES.has(String(update.enquiry_outcome ?? '').trim().toLowerCase());
+  return statusAction || outcomeAction;
+}
+
 async function leadActivityDateFields(crmService, zohoLeadId, internalUpdate, now = new Date()) {
-  const firstAction = Object.keys(internalUpdate || {}).some((key) => !(key === 'lead_status' && internalUpdate[key] === 'Not Contacted'));
+  const firstAction = isFirstActionUpdate(internalUpdate);
   const outcome = String(internalUpdate?.enquiry_outcome || '').trim().toLowerCase();
   const testDrive = outcome === 'test drive';
   const closed = CLOSED_OUTCOMES.has(outcome) || internalUpdate?.lead_status === 'Lost Lead';

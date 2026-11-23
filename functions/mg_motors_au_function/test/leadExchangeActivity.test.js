@@ -30,6 +30,38 @@ test('a move back to Not Contacted is not an action', async () => {
   assert.deepEqual(await svc.leadActivityDateFields(crm({}), 'L1', { lead_status: 'Not Contacted' }, NOW), {});
 });
 
+test('a plain field edit is not a first action (MG: fixing a name is not an action)', async () => {
+  for (const update of [
+    { customer_name: 'Melanie Smith' },
+    { mobile_number: '0412345678', email_address: 'a@b.com' },
+    { vehicle_model: 'MG4' },
+  ]) {
+    assert.deepEqual(await svc.leadActivityDateFields(crm({}), 'L1', update, NOW), {}, JSON.stringify(update));
+  }
+});
+
+test('a field edit that comes with a status move still counts, from the status', async () => {
+  assert.deepEqual(await svc.leadActivityDateFields(crm({}), 'L1', { customer_name: 'Melanie', lead_status: 'Follow-up 1' }, NOW), { First_Action_Date: '2026-11-07' });
+});
+
+test('statuses that still mean waiting for the dealer, and open outcomes, are not actions', async () => {
+  for (const update of [
+    { lead_status: 'Update Pending' },
+    { lead_status: 'Not Contacted', customer_name: 'Melanie' },
+    { lead_status: '-None-' },
+    { lead_status: 'Unattended Alert' },
+    { enquiry_outcome: 'Outcome Pending' },
+    { enquiry_outcome: '(required)' },
+    { enquiry_outcome: '' },
+  ]) {
+    assert.deepEqual(await svc.leadActivityDateFields(crm({}), 'L1', update, NOW), {}, JSON.stringify(update));
+  }
+});
+
+test('a Lost status from the dealer is an action', async () => {
+  assert.deepEqual(await svc.leadActivityDateFields(crm({}), 'L1', { lead_status: 'Lost Lead' }, NOW), { First_Action_Date: '2026-11-07', Sold_Date: '2026-11-07' });
+});
+
 test('Test Drive Date is stamped once when the outcome becomes Test Drive', async () => {
   assert.deepEqual(await svc.leadActivityDateFields(crm({}), 'L1', { enquiry_outcome: 'Test Drive' }, NOW), { First_Action_Date: '2026-11-07', Test_Drive_Date: '2026-11-07' });
   assert.deepEqual(await svc.leadActivityDateFields(crm({ First_Action_Date: '2026-11-01', Test_Drive_Date: '2026-11-02' }), 'L1', { enquiry_outcome: 'Test Drive' }, NOW), {});
