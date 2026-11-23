@@ -22,6 +22,7 @@ import { ROUTES } from "../../../constants/routes.constants";
 import { notificationService } from "../../../services/api/notificationService";
 import { CompactListSkeleton } from "../../../ui/Skeleton/PageSkeletons";
 import { useNotificationStyle } from "../../../utils/notificationStyle";
+import { parseProjectDateTime } from "../../../utils/projectTime";
 import "./NotificationBell.css";
 
 const MAX_BADGE = 99;
@@ -107,11 +108,11 @@ function MessageBody({ message }) {
   );
 }
 
-function timeAgo(catalystDateTime) {
-  if (!catalystDateTime) return "";
-  const then = new Date(catalystDateTime);
-  if (isNaN(then.getTime())) return "";
-  const diffMs = Date.now() - then.getTime();
+// CREATEDTIME is in the Catalyst project's time zone, not the viewer's.
+export function timeAgo(catalystDateTime, now = Date.now()) {
+  const then = parseProjectDateTime(catalystDateTime);
+  if (!then) return "";
+  const diffMs = now - then.getTime();
   const mins = Math.floor(diffMs / 60000);
   if (mins < 1) return "Just now";
   if (mins < 60) return `${mins}m ago`;

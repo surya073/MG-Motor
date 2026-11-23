@@ -29,6 +29,10 @@ export const env = {
     timeout: Number(process.env.REACT_APP_API_TIMEOUT_MS) || 15000,
   },
 
+  // The Catalyst project's time zone. Data Store CREATEDTIME / MODIFIEDTIME
+  // values are wall-clock times in this zone, with no offset.
+  projectTimezone: process.env.REACT_APP_PROJECT_TIMEZONE || "Australia/Sydney",
+
   isProd: process.env.NODE_ENV === "production",
   isDev: process.env.NODE_ENV === "development",
 };
