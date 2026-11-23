@@ -37,6 +37,7 @@
  */
 
 const { PROVIDER_NAME } = require('./dealerStudioPayload');
+const { TEST_DRIVE_AT, latestTimestamp } = require('./testDriveDate');
 
 const DEFAULT_STATUS_TARGET = 'status';
 const DEFAULT_OUTCOME_TARGET = 'enquiry_outcome';
@@ -261,9 +262,15 @@ function translateDealerStudioWebhook(payload, fieldMappings = []) {
   const changedAt = text(body.updated_at) ?? text(body.modified);
   const appointments = parseAppointments(body.appointments);
   const testDrives = parseTestDrives(body.test_drives);
+  const completedDrives = testDrives.filter((drive) => drive.status?.toLowerCase() === 'completed');
   const outcome = isSale
     ? RETAIL_ORDER_OUTCOME
-    : (testDrives.some((drive) => drive.status?.toLowerCase() === 'completed') ? TEST_DRIVE_OUTCOME : null);
+    : (completedDrives.length > 0 ? TEST_DRIVE_OUTCOME : null);
+  // When the test drive happened (the car came back, else went out), for MG's
+  // Test Drive Date: the latest completed drive.
+  const testDriveAt = outcome === TEST_DRIVE_OUTCOME
+    ? latestTimestamp(completedDrives.map((drive) => drive.checkedInAt || drive.checkedOutAt))
+    : null;
 
   const { edits: fieldEdits, skipped: skippedVehicle } = parseFieldEdits(body);
 
@@ -271,6 +278,7 @@ function translateDealerStudioWebhook(payload, fieldMappings = []) {
   if (status !== null) record[statusTarget] = status;
   if (changedAt !== null && status !== null) record.modified_at = changedAt;
   if (outcome !== null) record[outcomeTarget] = outcome;
+  if (testDriveAt !== null) record[TEST_DRIVE_AT] = testDriveAt;
 
   // Each edit travels under the target of the dealer's own mapping row for that MG field. With
   // no such row (a name, which the default map splits into first and last) it gets a private

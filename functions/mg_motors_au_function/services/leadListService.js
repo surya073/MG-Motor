@@ -19,10 +19,12 @@ const leadFacetsCache = require('./leadFacetsCache');
  */
 
 const logger = require('../utils/logger');
+const { connectedCrmLabel } = require('./integrations/connectedCrmLabel');
 const { FilterTooComplexError, translateZcqlError } = require('../utils/zcqlErrors');
 
 const LEADS_TABLE = 'leads';
 const DEALERS_TABLE = 'dealers';
+const DEALER_INTEGRATIONS_TABLE = 'dealer_integrations';
 
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
@@ -399,8 +401,38 @@ async function fetchDealerNames(catalystApp, codes) {
   return map;
 }
 
-function withDealerName(lead, names) {
-  return { ...lead, dealer_name: names.get(lead.dealer_code) || 'Unknown' };
+// dealer_code -> the dealer's CRM provider label (Fusion SD, Dealer Studio, ...)
+// for the CRM badge on the lead cards. A dealer with no integration has none.
+// Best effort: the badge is cosmetic, so a failed read never fails the list.
+async function fetchDealerCrms(catalystApp, codes) {
+  const map = new Map();
+  const unique = [...new Set(codes)].filter(Boolean);
+  try {
+    for (let i = 0; i < unique.length; i += ID_CHUNK) {
+      const list = unique.slice(i, i + ID_CHUNK).map((c) => `'${quote(c)}'`).join(', ');
+      const rows = await catalystApp.zcql().executeZCQLQuery(
+        `SELECT dealer_code, crm_type, crm_name FROM ${DEALER_INTEGRATIONS_TABLE} WHERE dealer_code IN (${list})`
+      );
+      rows.forEach((r) => {
+        const row = r[DEALER_INTEGRATIONS_TABLE];
+        const label = connectedCrmLabel(row);
+        if (row?.dealer_code && label && !map.has(row.dealer_code)) map.set(row.dealer_code, label);
+      });
+    }
+  } catch (err) {
+    logger.error('leadListService', 'Could not read dealer CRM types; lead cards show no CRM badge', err);
+  }
+  return map;
+}
+
+// Names and CRMs for a set of leads, read together.
+async function fetchDealerDetails(catalystApp, codes) {
+  const [names, crms] = await Promise.all([fetchDealerNames(catalystApp, codes), fetchDealerCrms(catalystApp, codes)]);
+  return { names, crms };
+}
+
+function withDealerName(lead, { names, crms }) {
+  return { ...lead, dealer_name: names.get(lead.dealer_code) || 'Unknown', dealer_crm: crms.get(lead.dealer_code) || null };
 }
 
 /**
@@ -511,10 +543,10 @@ async function getLeadsPage(catalystApp, query = {}) {
 
   const total = Number(countRows[0]?.[LEADS_TABLE]?.['COUNT(ROWID)']) || 0;
   const leads = pageRows.map((r) => r[LEADS_TABLE]);
-  const names = await fetchDealerNames(catalystApp, leads.map((l) => l.dealer_code));
+  const dealers = await fetchDealerDetails(catalystApp, leads.map((l) => l.dealer_code));
 
   return {
-    leads: leads.map((lead) => withDealerName(lead, names)),
+    leads: leads.map((lead) => withDealerName(lead, dealers)),
     pagination: {
       page,
       pageSize,
@@ -539,8 +571,7 @@ async function getLeadByIdentifier(catalystApp, identifier) {
     );
     if (rows.length) {
       const lead = rows[0][LEADS_TABLE];
-      const names = await fetchDealerNames(catalystApp, [lead.dealer_code]);
-      return withDealerName(lead, names);
+      return withDealerName(lead, await fetchDealerDetails(catalystApp, [lead.dealer_code]));
     }
   }
   logger.info('leadListService', `Lead not found for identifier ${id}`);

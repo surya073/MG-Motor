@@ -276,7 +276,7 @@ test('v3: appointments, test drives, status type and provider are all read', () 
   assert.equal(out.statusType, 'working');
   assert.deepEqual(out.provider, { name: 'MG Leads Exchange', providerId: 'ENQ-1' });
   assert.equal(out.outcome, 'Test Drive');
-  assert.deepEqual(out.record, { status: 'working', modified_at: '2026-11-02T01:00:00Z', enquiry_outcome: 'Test Drive' });
+  assert.deepEqual(out.record, { status: 'working', modified_at: '2026-11-02T01:00:00Z', enquiry_outcome: 'Test Drive', __test_drive_at: '2026-11-05T23:35:00Z' });
 });
 
 test('v3: every status type is read case-insensitively', () => {
@@ -382,6 +382,22 @@ test('a Completed test drive on its own (no status in the post) still sets the o
   await receive(harness, { id: 200001, leads: [{ id: DS_LEAD_ID }], test_drives: [{ status: 'Completed' }] });
   assert.deepEqual(harness.oemWrites, [{ zohoLeadId: 'ZL1', fields: { Enquiry_Outcome: 'Test Drive' } }]);
   assert.equal(harness.db.tables.leads[0].lead_status, 'Not Contacted');
+});
+
+test('a Completed test drive dates MG Test Drive Date by when it happened, not the webhook day', async (t) => {
+  const harness = harnessFor(t);
+  t.mock.method(oemCrmService, 'fetchOemLeadsByIds', async () => [{}]);
+  await receive(harness, {
+    id: 200001, updated_at: '2026-11-22T00:00:00Z', leads: [{ id: DS_LEAD_ID }],
+    // car out 13:00, back 13:45 AEDT on 19 Nov; an older completed drive is ignored
+    test_drives: [
+      { status: 'Completed', checked_out_at: '2026-11-10T02:00:00Z', checked_in_at: '2026-11-10T02:30:00Z' },
+      { status: 'Completed', checked_out_at: '2026-11-19T02:00:00Z', checked_in_at: '2026-11-19T02:45:00Z' },
+    ],
+  });
+  assert.equal(harness.oemWrites.length, 1);
+  assert.equal(harness.oemWrites[0].fields.Enquiry_Outcome, 'Test Drive');
+  assert.equal(harness.oemWrites[0].fields.Test_Drive_Date, '2026-11-19');
 });
 
 test('the same Completed test drive posted again changes nothing', async (t) => {

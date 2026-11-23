@@ -26,9 +26,46 @@
  */
 
 const { getFusionInboundEditFields } = require('../../../config/env');
+const { TEST_DRIVE_AT, latestTimestamp } = require('./testDriveDate');
 
 const DEFAULT_STATUS_TARGET = 'enquiryStatus';
 const CUSTOMER_NAME_TARGET = '__customerName';
+
+// A completed Fusion test drive is MG Enquiry Outcome "Test Drive". It travels
+// under a private key with its own mapping row, never the dealer's outbound
+// enquiry_outcome target (activity.subType), which means something else.
+const OUTCOME_TARGET = '__fusionEnquiryOutcome';
+const TEST_DRIVE_OUTCOME = 'Test Drive';
+// test_drive.status is the dealer's own free text: only a word that clearly
+// means the drive took place counts. Booked / scheduled ones change nothing.
+const COMPLETED_TEST_DRIVE_STATUS = /\b(completed?|done|finished|returned|checked[\s_-]?in)\b/i;
+
+/**
+ * When the lead's completed test drive happened, from the webhook's test-drive
+ * blocks (lead-api-mg-motors-openapi 3.yaml, PushedLead; the dealer must switch
+ * the test-drive / activity blocks on):
+ *   - test_drive: the newest test drive, { status, starts_at, ends_at };
+ *   - activities[]: { kind: "testdrive", completed: true, starts_at, ends_at }.
+ * Returns the latest completed drive's end (else start) time, or null when no
+ * completed test drive is in the body. `found` says whether one is, even undated.
+ */
+function completedTestDrive(body) {
+  const dates = [];
+  let found = false;
+  const drive = body.test_drive;
+  if (drive && typeof drive === 'object' && !Array.isArray(drive)
+    && COMPLETED_TEST_DRIVE_STATUS.test(String(drive.status ?? ''))) {
+    found = true;
+    dates.push(text(drive.ends_at) ?? text(drive.starts_at));
+  }
+  for (const activity of Array.isArray(body.activities) ? body.activities.slice(0, 50) : []) {
+    if (!activity || typeof activity !== 'object') continue;
+    if (String(activity.kind ?? '').toLowerCase().replace(/[\s_-]/g, '') !== 'testdrive' || activity.completed !== true) continue;
+    found = true;
+    dates.push(text(activity.ends_at) ?? text(activity.starts_at));
+  }
+  return { found, at: found ? latestTimestamp(dates) : null };
+}
 
 // Fusion's body is nested ({ contact: { firstName } }) while the mapping names the
 // field with a dotted path ("contact.firstName"); a flat dotted key is read too.
@@ -91,6 +128,15 @@ function translateFusionWebhook(payload, fieldMappings = []) {
   }
   if (pushedAt !== null && fieldTargets.length > 0 && !('modified_at' in record)) record.modified_at = pushedAt;
 
+  // A completed test drive: MG Enquiry Outcome "Test Drive", dated when it happened.
+  const testDrive = completedTestDrive(body);
+  if (testDrive.found) {
+    record[OUTCOME_TARGET] = TEST_DRIVE_OUTCOME;
+    syntheticMappings.push({ source_field: 'enquiry_outcome', target_field: OUTCOME_TARGET, data_type: 'string', required: false });
+    if (testDrive.at !== null) record[TEST_DRIVE_AT] = testDrive.at;
+    if (pushedAt !== null && !('modified_at' in record)) record.modified_at = pushedAt;
+  }
+
   // Why it was lost (28 Oct 2026). Kept apart from the mapped record: it is
   // written to MG's lost-reason fields only when the status lands as Lost.
   const lostReason = status !== null ? text(body.lostReason) : null;
@@ -103,8 +149,9 @@ function translateFusionWebhook(payload, fieldMappings = []) {
     statusTarget,
     fieldTargets,
     syntheticMappings,
+    hasTestDrive: testDrive.found,
     lost: lostReason !== null ? { reason: lostReason, subReason: lostSubReason, at: pushedAt } : null,
   };
 }
 
-module.exports = { translateFusionWebhook, DEFAULT_STATUS_TARGET };
+module.exports = { translateFusionWebhook, DEFAULT_STATUS_TARGET, OUTCOME_TARGET };

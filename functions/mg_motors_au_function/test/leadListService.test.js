@@ -311,3 +311,17 @@ test('lead detail resolves by ROWID or crm_record_id and never queries ROWID wit
   assert.equal(await leadList.getLeadByIdentifier(missing, 'nope'), null);
   assert.equal(await leadList.getLeadByIdentifier(missing, '   '), null);
 });
+
+// --- dealer CRM badge -------------------------------------------------------
+
+test('each lead carries its dealer CRM label (Fusion SD, Dealer Studio, ...) for the card badge', async () => {
+  const rows = [leadRow(1, { dealer_code: 'F1' }), leadRow(2, { dealer_code: 'S1' }), leadRow(3, { dealer_code: 'N1' })];
+  const base = standardResponder({ total: 3, rows, dealerNames: [['F1', 'Fusion MG'], ['S1', 'Studio MG'], ['N1', 'No CRM MG']] });
+  const app = fakeApp((sql) => (sql.includes('FROM dealer_integrations WHERE dealer_code IN')
+    ? [{ dealer_integrations: { dealer_code: 'F1', crm_type: 'FUSION_SD' } }, { dealer_integrations: { dealer_code: 'S1', crm_type: 'DEALER_STUDIO' } }]
+    : base(sql)));
+  const result = await leadList.getLeadsPage(app, {});
+  assert.deepEqual(result.leads.map((l) => [l.dealer_name, l.dealer_crm]), [
+    ['Fusion MG', 'Fusion SD'], ['Studio MG', 'Dealer Studio'], ['No CRM MG', null],
+  ]);
+});

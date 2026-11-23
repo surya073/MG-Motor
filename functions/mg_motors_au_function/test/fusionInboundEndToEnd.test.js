@@ -248,3 +248,70 @@ test('a status and corrected details in one webhook apply both', async (t) => {
   assert.equal(written.Lead_Status, 'Lost Lead');
   assert.equal(written.Postcode, '2000');
 });
+
+// --- test drives (PushedLead test_drive / activities, lead-api-mg-motors-openapi 3.yaml) ---
+
+const oemCrmService = require('../services/zohoCrmService');
+const { translateFusionWebhook, OUTCOME_TARGET } = require('../services/integrations/adapters/fusionSdInbound');
+const { TEST_DRIVE_AT } = require('../services/integrations/adapters/testDriveDate');
+
+test('translator: a completed test_drive is outcome Test Drive, dated by its end (else start)', () => {
+  const out = translateFusionWebhook({ lead_id: 'L1', test_drive: { status: 'Completed', starts_at: '2026-11-20T02:00:00Z', ends_at: '2026-11-20T03:00:00Z' } });
+  assert.equal(out.hasTestDrive, true);
+  assert.equal(out.record[OUTCOME_TARGET], 'Test Drive');
+  assert.equal(out.record[TEST_DRIVE_AT], '2026-11-20T03:00:00Z');
+  assert.ok(out.syntheticMappings.some((m) => m.source_field === 'enquiry_outcome' && m.target_field === OUTCOME_TARGET));
+});
+
+test('translator: a booked or scheduled test drive changes nothing', () => {
+  for (const status of ['Booked', 'Scheduled', 'Pending', '', null]) {
+    const out = translateFusionWebhook({ lead_id: 'L1', test_drive: { status, starts_at: '2026-11-25T02:00:00Z' } });
+    assert.equal(out.hasTestDrive, false, String(status));
+    assert.equal(OUTCOME_TARGET in out.record, false, String(status));
+  }
+  const notDone = translateFusionWebhook({ lead_id: 'L1', activities: [{ kind: 'testdrive', completed: false, starts_at: '2026-11-25T02:00:00Z' }] });
+  assert.equal(notDone.hasTestDrive, false);
+});
+
+test('translator: a completed testdrive activity counts; the latest completed drive dates it; other kinds do not', () => {
+  const out = translateFusionWebhook({
+    lead_id: 'L1',
+    activities: [
+      { kind: 'call', completed: true, starts_at: '2026-11-22T01:00:00Z' },
+      { kind: 'testdrive', completed: true, starts_at: '2026-11-18T01:00:00Z' },
+      { kind: 'testdrive', completed: true, starts_at: '2026-11-19T01:00:00Z', ends_at: '2026-11-19T02:00:00Z' },
+    ],
+  });
+  assert.equal(out.record[OUTCOME_TARGET], 'Test Drive');
+  assert.equal(out.record[TEST_DRIVE_AT], '2026-11-19T02:00:00Z');
+});
+
+test('a Fusion webhook with only a completed test drive sets Enquiry Outcome and the real Test Drive Date', async (t) => {
+  const h = await buckby(t, { mgStatus: 'Not Contacted' });
+  t.mock.method(oemCrmService, 'fetchOemLeadsByIds', async () => [{}]);
+  const result = await h.deliver({
+    lead_id: fixtures.FUSION_TEST_LEAD_ID,
+    dealer_id: fixtures.FUSION_TEST_DEALER_ID,
+    pushed_at: '2026-11-22T00:00:00Z',
+    // 14:00 AEDT on 20 Nov, though the webhook came two days later
+    test_drive: { status: 'Completed', starts_at: '2026-11-20T02:00:00Z', ends_at: '2026-11-20T03:00:00Z' },
+  });
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.equal(h.oemWrites.length, 1);
+  assert.equal(h.oemWrites[0].fields.Enquiry_Outcome, 'Test Drive');
+  assert.equal(h.oemWrites[0].fields.Test_Drive_Date, '2026-11-20');
+  assert.equal(h.db.tables.leads[0].enquiry_outcome, 'Test Drive');
+});
+
+test('a re-sent completed test drive never moves a Retail Order back to Test Drive', async (t) => {
+  const h = await buckby(t);
+  h.db.tables.leads[0].enquiry_outcome = 'Retail Order';
+  t.mock.method(oemCrmService, 'fetchOemLeadsByIds', async () => [{}]);
+  await h.deliver({
+    lead_id: fixtures.FUSION_TEST_LEAD_ID,
+    dealer_id: fixtures.FUSION_TEST_DEALER_ID,
+    test_drive: { status: 'Completed', ends_at: '2026-11-20T03:00:00Z' },
+  });
+  assert.deepEqual(h.oemWrites, []);
+  assert.equal(h.db.tables.leads[0].enquiry_outcome, 'Retail Order');
+});

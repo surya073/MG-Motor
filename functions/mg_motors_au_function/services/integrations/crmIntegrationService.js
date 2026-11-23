@@ -24,6 +24,7 @@ const {
 } = require('../../config/env');
 const integrationAuthService = require('./integrationAuthService');
 const { translateFusionWebhook } = require('./adapters/fusionSdInbound');
+const { TEST_DRIVE_AT } = require('./adapters/testDriveDate');
 const {
   translateDealerStudioWebhook, mayApplyTestDriveOutcome, dropFormattingOnlyChanges, isOurProvider,
 } = require('./adapters/dealerStudioInbound');
@@ -1144,15 +1145,7 @@ async function recordUnresolvedAcknowledgement(catalystApp, integration, leadRow
 // What MG records when a dealer has accepted the lead (Happy 1): the dealer
 // acknowledgement, and MG's "Lead Exchanged" checkbox (MG, 28 Oct 2026).
 // Connected_CRM (MG Leads Exchange Activity) names the dealer's CRM provider.
-const CONNECTED_CRM_LABELS = Object.freeze({
-  FUSION_SD: 'Fusion SD',
-  DEALER_STUDIO: 'Dealer Studio',
-  ZOHO_CRM: 'Zoho CRM',
-});
-
-function connectedCrmLabel(integration) {
-  return CONNECTED_CRM_LABELS[integration?.crm_type] || String(integration?.crm_name || integration?.crm_type || '').trim();
-}
+const { connectedCrmLabel } = require('./connectedCrmLabel');
 
 function deliveryAcknowledgementFields(integration) {
   const connectedCrm = connectedCrmLabel(integration);
@@ -1187,7 +1180,8 @@ function mgToday(now = new Date()) {
  * Leads Exchange Activity dates, stamped when a dealer's update is applied to MG:
  *  - First_Action_Date: the first real dealer action, a status move or an
  *    enquiry outcome (see isFirstActionUpdate); a plain field edit is not one;
- *  - Test_Drive_Date: when the Enquiry Outcome becomes Test Drive;
+ *  - Test_Drive_Date: when the Enquiry Outcome becomes Test Drive, dated when the
+ *    dealer's test drive happened if the webhook said (testDriveAt), else the event day;
  *  - Sold_Date (Closed Date): when the outcome becomes a closing one (see CLOSED_OUTCOMES).
  * Each is written once: skipped if MG already holds a value. Best effort: if MG's
  * record cannot be read, nothing is stamped and the dealer update still applies.
@@ -1215,7 +1209,15 @@ function isFirstActionUpdate(internalUpdate) {
   return statusAction || outcomeAction;
 }
 
-async function leadActivityDateFields(crmService, zohoLeadId, internalUpdate, now = new Date()) {
+// MG's Test Drive Date: the day (in Australian time) the dealer's test drive
+// happened, when the webhook carried it and it is not in the future; else null.
+function testDriveDay(testDriveAt, now) {
+  if (!(testDriveAt instanceof Date) || Number.isNaN(testDriveAt.getTime())) return null;
+  if (testDriveAt.getTime() > now.getTime() + 24 * 60 * 60 * 1000) return null;
+  return mgToday(testDriveAt);
+}
+
+async function leadActivityDateFields(crmService, zohoLeadId, internalUpdate, now = new Date(), { testDriveAt = null } = {}) {
   const firstAction = isFirstActionUpdate(internalUpdate);
   const outcome = String(internalUpdate?.enquiry_outcome || '').trim().toLowerCase();
   const testDrive = outcome === 'test drive';
@@ -1227,7 +1229,7 @@ async function leadActivityDateFields(crmService, zohoLeadId, internalUpdate, no
     const today = mgToday(now);
     return {
       ...(firstAction && !record.First_Action_Date ? { First_Action_Date: today } : {}),
-      ...(testDrive && !record.Test_Drive_Date ? { Test_Drive_Date: today } : {}),
+      ...(testDrive && !record.Test_Drive_Date ? { Test_Drive_Date: testDriveDay(testDriveAt, now) || today } : {}),
       ...(closed && !record.Sold_Date ? { Sold_Date: today } : {}),
     };
   } catch (err) {
@@ -2149,6 +2151,7 @@ function resolveInboundRecord(integration, externalPayload, fieldMappings) {
       record,
       hasStatus: Object.prototype.hasOwnProperty.call(translated.record, translated.statusTarget),
       hasFieldEdits: translated.fieldTargets.length > 0,
+      hasTestDrive: translated.hasTestDrive === true,
       syntheticMappings: translated.syntheticMappings,
     };
   }
@@ -2329,8 +2332,8 @@ async function processInboundWebhook(catalystApp, integration, externalPayload, 
   const fieldMappings = await getFieldMappings(catalystApp, integration.ROWID);
   const statusMappings = await getStatusMappings(catalystApp, integration.ROWID);
 
-  const { externalLeadId, record: externalRecord, hasStatus, hasFieldEdits, syntheticMappings = [] } = resolveInboundRecord(integration, externalPayload, fieldMappings);
-  if (externalLeadId && !hasStatus && !hasFieldEdits) {
+  const { externalLeadId, record: externalRecord, hasStatus, hasFieldEdits, hasTestDrive, syntheticMappings = [] } = resolveInboundRecord(integration, externalPayload, fieldMappings);
+  if (externalLeadId && !hasStatus && !hasFieldEdits && !hasTestDrive) {
     // A status-like field we do not read (28 Oct 2026: Fusion renamed
     // `status` to `enquiryStatus` and five updates were acknowledged unread).
     // Raised as a mapping failure so it is noticed the same day; the stored
@@ -3069,11 +3072,11 @@ async function attemptInboundLeadUpdateCore(
     { excludeSourceFields: ['lead_status', 'accept_privacy_policy'] }
   );
 
-  // Dealer Studio re-posts the cluster on every change, so a Completed test
-  // drive reappears after the lead has become an order: it must not move the
-  // outcome backwards.
+  // Dealer Studio re-posts the cluster on every change, and Fusion re-sends the
+  // newest test drive, so a completed test drive reappears after the lead has
+  // become an order: it must not move the outcome backwards.
   if (
-    integration.crm_type === 'DEALER_STUDIO' &&
+    ['DEALER_STUDIO', 'FUSION_SD'].includes(integration.crm_type) &&
     mappedUpdate.enquiry_outcome === 'Test Drive' &&
     !mayApplyTestDriveOutcome(existingLeadRow.enquiry_outcome)
   ) {
@@ -3232,15 +3235,16 @@ async function attemptInboundLeadUpdateCore(
   // 2026; Dealer Studio the same, 20 Nov 2026). An outcome the lead already holds as
   // an order (Purchase, Fleet, On-Sold) is never replaced. Only when MG's lead is not
   // already Lost, so an echo or a repeat of a Lost MG already holds stays a no-change
-  // (or a reason-only update). Dealer Studio re-posts the whole cluster, so a
-  // Completed test drive in the same post gives way to Lost.
+  // (or a reason-only update). A completed test drive in the same post (Dealer
+  // Studio re-posts the whole cluster; Fusion re-sends its newest test drive)
+  // gives way to Lost.
   const dealerStudio = integration.crm_type === 'DEALER_STUDIO';
   if (
     (fusionV2 || dealerStudio) &&
     isStatusSync &&
     mappedUpdate.lead_status === FUSION_LOST_STATUS &&
     (mappedUpdate.enquiry_outcome === undefined ||
-      (dealerStudio && mappedUpdate.enquiry_outcome === 'Test Drive')) &&
+      mappedUpdate.enquiry_outcome === 'Test Drive') &&
     !['lost lead', 'lost'].includes(String(existingLeadRow.lead_status ?? '').trim().toLowerCase()) &&
     !FUSION_FINAL_OUTCOMES.has(String(existingLeadRow.enquiry_outcome ?? '').trim().toLowerCase())
   ) {
@@ -3419,7 +3423,10 @@ async function attemptInboundLeadUpdateCore(
     ...toZohoApiFields(internalUpdate),
     // A replayed event dates the action when it happened, not when it is
     // processed (OEM review 4.2).
-    ...(await leadActivityDateFields(zohoCrmService, mapping.zoho_lead_id, internalUpdate, inboundEventTime(externalRecord) || new Date())),
+    ...(await leadActivityDateFields(zohoCrmService, mapping.zoho_lead_id, internalUpdate, inboundEventTime(externalRecord) || new Date(), {
+      // When the dealer's test drive actually happened, if the webhook said.
+      testDriveAt: pathPolicy.parseTimestamp(externalRecord?.[TEST_DRIVE_AT]),
+    })),
     ...(internalUpdate.lead_status === 'Lost Lead' ? fusionLostReasonFields(externalRecord?.[FUSION_LOST_DETAIL]) : {}),
   };
   if (zohoApiFields.Reason_for_Lost) fieldChanges.push(lostReasonChange(externalRecord[FUSION_LOST_DETAIL], zohoApiFields));
