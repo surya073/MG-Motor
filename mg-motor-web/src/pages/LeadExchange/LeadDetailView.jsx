@@ -736,6 +736,16 @@ function IntegrationPathCard({ path, journeyPaths, failureDetail }) {
   );
 }
 
+// Colour of the dealer-CRM badge in the header (Fusion SD, Dealer Studio,
+// Zoho CRM, or a custom CRM's name).
+function crmBadgeTone(crm) {
+  const name = String(crm || "").toLowerCase();
+  if (name.includes("fusion")) return "fusion";
+  if (name.includes("dealer studio")) return "studio";
+  if (name.includes("zoho")) return "zoho";
+  return "other";
+}
+
 function MoreDetailsCard({ val, lead }) {
   // Confirms the dealer CRM actually accepted and created the record for
   // this enquiry (Happy 1). Written once the outbound push succeeds and
@@ -1148,6 +1158,18 @@ export default function LeadDetailView({ lead, onBack, onLeadChanged }) {
               <span className="lead-detail__meta-label">Dealer Code</span>
               {val("dealer_code")}
             </span>
+            {/* The dealer's CRM: from the lead list (dealer_crm) or MG's Connected CRM field. */}
+            {(lead.dealer_crm || lead.connected_crm) && (
+              <>
+                <span className="lead-detail__meta-divider" />
+                <span
+                  className={`lead-detail__crm-badge lead-detail__crm-badge--${crmBadgeTone(lead.dealer_crm || lead.connected_crm)}`}
+                  title="Dealer CRM"
+                >
+                  {lead.dealer_crm || lead.connected_crm}
+                </span>
+              </>
+            )}
             {lead.lead_source && (
               <>
                 <span className="lead-detail__meta-divider" />

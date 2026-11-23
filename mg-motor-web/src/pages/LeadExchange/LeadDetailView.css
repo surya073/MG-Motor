@@ -279,6 +279,42 @@
    SOURCE BADGE
    ========================================================= */
 
+/* Dealer CRM badge in the header: one tint per CRM. */
+.lead-detail__crm-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+}
+
+.lead-detail__crm-badge--fusion {
+  background-color: var(--color-info-soft);
+  border-color: var(--color-info);
+  color: var(--color-info);
+}
+
+.lead-detail__crm-badge--studio {
+  background-color: var(--color-warning-soft);
+  border-color: var(--color-warning);
+  color: var(--color-warning);
+}
+
+.lead-detail__crm-badge--zoho {
+  background-color: var(--color-success-soft);
+  border-color: var(--color-success);
+  color: var(--color-success);
+}
+
+.lead-detail__crm-badge--other {
+  background-color: var(--color-primary-soft);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
 .lead-detail__source-badge {
   display: inline-flex;
   align-items: center;
@@ -1119,7 +1155,7 @@
 
 .lead-detail__timeline-dot--happy { background: var(--scenario-happy-1-bg, #e6f7ee); color: var(--scenario-happy-1-text, #1a7f4e); }
 .lead-detail__timeline-dot--unhappy { background: var(--scenario-unhappy-1-bg, #fdeaea); color: var(--scenario-unhappy-1-text, #c0392b); }
-.lead-detail__timeline-dot--neutral { background: var(--color-surface-muted, #f0f0f0); color: var(--color-text-muted, #666); }
+.lead-detail__timeline-dot--neutral { background: var(--color-surface-alt); color: var(--color-text-muted, #666); }
 
 .lead-detail__timeline-title-row {
   display: flex;
@@ -1137,7 +1173,7 @@
 }
 .lead-detail__timeline-badge--happy { background: var(--scenario-happy-1-bg, #e6f7ee); color: var(--scenario-happy-1-text, #1a7f4e); }
 .lead-detail__timeline-badge--unhappy { background: var(--scenario-unhappy-1-bg, #fdeaea); color: var(--scenario-unhappy-1-text, #c0392b); }
-.lead-detail__timeline-badge--neutral { background: var(--color-surface-muted, #f0f0f0); color: var(--color-text-muted, #666); }
+.lead-detail__timeline-badge--neutral { background: var(--color-surface-alt); color: var(--color-text-muted, #666); }
 
 .lead-detail__timeline-detail {
   font-size: 12.5px;
@@ -1177,7 +1213,7 @@
   gap: 10px;
   min-width: 0; /* let a long unbroken ID shrink instead of overflowing into the next column */
   padding: 10px 12px;
-  background-color: var(--color-surface-muted, #f7f7f8);
+  background-color: var(--color-surface-alt);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md, 8px);
 }
@@ -1246,7 +1282,7 @@
 }
 
 .lead-detail__more-details-pill--no {
-  background-color: var(--color-surface-muted, #f0f0f0);
+  background-color: var(--color-surface-alt);
   color: var(--color-text-muted, #666);
 }
 
@@ -1529,11 +1565,11 @@
   margin-top: 8px;
   padding: 8px 10px;
   border-radius: 6px;
-  background: rgba(179, 38, 30, 0.07);
-  border-left: 3px solid rgba(179, 38, 30, 0.55);
+  background: var(--scenario-unhappy-1-bg);
+  border-left: 3px solid var(--scenario-unhappy-1-text);
   font-size: 13px;
   line-height: 1.6;
-  color: #7a1c16;
+  color: var(--scenario-unhappy-1-text);
 }
 
 .lead-detail__path-card-reason strong {

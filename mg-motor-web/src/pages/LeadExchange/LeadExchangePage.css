@@ -814,15 +814,15 @@
 }
 
 .lead-card__chip--path-happy {
-  background: rgba(30, 122, 60, 0.1);
-  border-color: rgba(30, 122, 60, 0.28);
-  color: #1e7a3c;
+  background: var(--scenario-happy-1-bg);
+  border-color: var(--scenario-happy-1-text);
+  color: var(--scenario-happy-1-text);
 }
 
 .lead-card__chip--path-unhappy {
-  background: rgba(179, 38, 30, 0.1);
-  border-color: rgba(179, 38, 30, 0.28);
-  color: #b3261e;
+  background: var(--scenario-unhappy-1-bg);
+  border-color: var(--scenario-unhappy-1-text);
+  color: var(--scenario-unhappy-1-text);
 }
 
 .lead-card__chip--source {
@@ -919,30 +919,6 @@
   color: var(--color-text-muted);
   flex-wrap: wrap; /* show the full date instead of truncating it */
   min-width: 0;
-}
-
-.lead-card__view-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  padding: var(--space-1) var(--space-3);
-  background-color: var(--color-black);
-  color: var(--color-white);
-  border-radius: var(--radius-full);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semibold);
-  white-space: nowrap;
-  transition: opacity var(--transition-fast);
-}
-
-.lead-card__view-btn:hover {
-  opacity: 0.85;
-}
-
-[data-theme="dark"] .lead-card__view-btn {
-  background-color: var(--color-white);
-  color: var(--color-black);
 }
 
 @media (max-width: 600px) {
@@ -1152,9 +1128,9 @@
   font-weight: 600;
   line-height: 1.6;
   white-space: nowrap;
-  background: rgba(179, 38, 30, 0.10);
-  border: 1px solid rgba(179, 38, 30, 0.28);
-  color: #b3261e;
+  background: var(--scenario-unhappy-1-bg);
+  border: 1px solid var(--scenario-unhappy-1-text);
+  color: var(--scenario-unhappy-1-text);
 }
 
 .ooo-panel__subtitle {
@@ -1202,7 +1178,7 @@
 .ooo-panel__error {
   margin-top: var(--space-3);
   font-size: var(--fs-xs);
-  color: #b3261e;
+  color: var(--color-danger);
 }
 
 /* ---------- Summary + "View Out-of-Order Events" entry point ---------- */

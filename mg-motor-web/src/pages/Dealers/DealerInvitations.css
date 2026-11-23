@@ -569,13 +569,13 @@
 /* ---------- Email link (blue, matches Dealers page) ---------- */
 
 .dealer-invitations__mail-link {
-  color: #3869ee;
+  color: var(--color-info);
   text-decoration: underline;
   text-underline-offset: 2px;
   font-weight: var(--fw-medium);
 }
 
 .dealer-invitations__mail-link:hover {
-  color: #1e40af;
+  color: var(--color-text-primary);
 }
 

@@ -9,6 +9,10 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Google+Sans+Flex:opsz,wght@6..144,1..1000&family=Gugi&family=Oswald:wght@200..700&family=Outfit:wght@100..900&display=swap');
 
 :root {
+  /* Native controls (dropdown lists, date pickers, scrollbars, autofill)
+     follow the app theme, not the OS. */
+  color-scheme: light;
+
   /* ---------- Brand ---------- */
   --color-primary: #D0021B;
   --color-primary-hover: #A80116;
@@ -236,6 +240,7 @@
    Dark theme
    ============================================================ */
 [data-theme="dark"] {
+  color-scheme: dark;
   --color-primary-soft: rgba(208, 2, 27, 0.18);
   --color-primary-soft-strong: rgba(208, 2, 27, 0.28);
 

@@ -1018,7 +1018,7 @@ export default function SyncLogsPage() {
                   >
                     <span
                       className="sync-logs__path-banner-icon"
-                      style={{ backgroundColor: "rgba(255,255,255,0.55)", color: selectedScenarios[0].info.color.text }}
+                      style={{ backgroundColor: "var(--color-surface-glass-strong)", color: selectedScenarios[0].info.color.text }}
                     >
                       {selectedScenarios[0].info.path === "happy" ? (
                         <CheckCircle2 size={22} />

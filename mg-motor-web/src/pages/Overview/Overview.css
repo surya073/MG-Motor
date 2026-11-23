@@ -1468,6 +1468,15 @@ ul{
   background-color: rgba(217, 119, 6, 0.18);
 }
 
+/* Dark brown text is unreadable on the dark panel: lighter golds instead. */
+[data-theme="dark"] .rank-list__badge--gold {
+  color: #FACC15;
+}
+
+[data-theme="dark"] .rank-list__badge--bronze {
+  color: #F59E0B;
+}
+
 .rank-list__body {
   flex: 1;
   min-width: 0;

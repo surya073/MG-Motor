@@ -52,15 +52,16 @@
 /* Same style for both buttons */
 .sync-logs__sync-btn--dealers,
 .sync-logs__sync-btn--leads {
-  background: #111111;
-  color: #ffffff;
-  border-color: #111111;
+  /* Inverse of the page in either theme: dark button on light, light on dark. */
+  background: var(--color-text-primary);
+  color: var(--color-surface);
+  border-color: var(--color-text-primary);
 }
 
 /* Hover */
 .sync-logs__sync-btn:hover:not(:disabled) {
-  background: #ffffff;
-  color: #111111;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
   border-color: #111111;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
 }
@@ -674,18 +675,18 @@
 }
 
 .sync-logs__stat-icon--success {
-  background-color: #dcfce7;
-  color: #16a34a;
+  background-color: var(--color-success-soft);
+  color: var(--color-success);
 }
 
 .sync-logs__stat-icon--info {
-  background-color: #dbeafe;
-  color: #1d4ed8;
+  background-color: var(--color-info-soft);
+  color: var(--color-info);
 }
 
 .sync-logs__stat-icon--danger {
-  background-color: #fee2e2;
-  color: #dc2626;
+  background-color: var(--color-danger-soft);
+  color: var(--color-danger);
 }
 
 .sync-logs__stat-label {

@@ -1038,21 +1038,11 @@ export default function LeadExchangePage() {
 
                       {/* ---- Footer: when + the explicit click target ---- */}
                       <div className="lead-card__footer">
+                        {/* The whole card opens the details; the dealer's CRM is shown there. */}
                         <span className="lead-card__footer-note">
                           <Calendar size={13} />
                           {row.assigned_date ? `Since ${row.assigned_date}` : "—"}
                         </span>
-                        <button
-                          type="button"
-                          className="lead-card__view-btn"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openDetail(row);
-                          }}
-                        >
-                          View Details
-                          <Eye size={13} />
-                        </button>
                       </div>
                     </div>
                   );

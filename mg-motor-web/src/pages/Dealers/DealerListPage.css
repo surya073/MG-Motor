@@ -698,14 +698,14 @@
 /* ---------- Contact links (email / phone) ---------- */
 
 .dealer-list__contact-link--mail {
-  color: #2d75af ;
+  color: var(--color-info);
   text-decoration: underline;
   text-underline-offset: 2px;
   font-weight: var(--fw-medium);
 }
 
 .dealer-list__contact-link--mail:hover {
-  color: #2343ac;
+  color: var(--color-text-primary);
 }
 
 .dealer-list__contact-badge--call {
