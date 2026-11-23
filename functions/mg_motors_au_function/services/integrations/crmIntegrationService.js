@@ -3317,6 +3317,13 @@ async function attemptInboundLeadUpdateCore(
     )
   );
 
+  // Happy 2 is a status change. A dealer that re-posts its unchanged status
+  // with a field edit (Dealer Studio sends the whole record every time) is
+  // only a data sync, Happy 5: the status was dropped above as no change.
+  if (isStatusSync && internalUpdate.lead_status === undefined) {
+    isStatusSync = false;
+  }
+
   const fieldChanges = Object.keys(internalUpdate)
     .map((key) => ({
       field: key,

@@ -667,6 +667,25 @@ test('a name edit is applied to MG (Happy 5) as First_Name and Last_Name', async
   assert.equal(harness.db.tables.leads[0].lead_status, 'Not Contacted');
 });
 
+test('a name edit re-posted with the unchanged status is Happy 5, not Happy 2', async (t) => {
+  const harness = harnessFor(t, { lead: { lead_status: 'Contacted' } });
+  const result = await receive(harness, edited({ status_type: 'working', contact: { first_name: 'Janet', last_name: 'Citizen' } }));
+  assert.equal(result.scenarioCode, 'Happy 5', JSON.stringify(result));
+  assert.equal(harness.oemWrites.length, 1);
+  assert.equal(harness.oemWrites[0].fields.First_Name, 'Janet');
+  assert.equal(Object.hasOwn(harness.oemWrites[0].fields, 'Lead_Status'), false, 'the unchanged status is not written');
+  assert.equal(Object.hasOwn(harness.oemWrites[0].fields, 'First_Action_Date'), false, 'a field edit is not a first action');
+  assert.equal(harness.db.tables.integration_logs.at(-1).happy_unhappy_path_name, 'Happy 5');
+});
+
+test('a real status change in the same post is still Happy 2', async (t) => {
+  const harness = harnessFor(t);
+  const result = await receive(harness, edited({ status_type: 'working', contact: { first_name: 'Janet', last_name: 'Citizen' } }));
+  assert.equal(result.scenarioCode, 'Happy 2', JSON.stringify(result));
+  assert.equal(harness.db.tables.leads[0].lead_status, 'Contacted');
+  assert.equal(harness.db.tables.integration_logs.at(-1).happy_unhappy_path_name, 'Happy 2');
+});
+
 test('the same name in other spacing or case is not an edit', async (t) => {
   const harness = harnessFor(t);
   const result = await receive(harness, edited({ contact: { first_name: ' jane ', last_name: 'CITIZEN' } }));
