@@ -426,7 +426,7 @@ test('booked appointments and in-progress test drives are acknowledged and chang
   assert.deepEqual(harness.oemWrites, []);
 });
 
-test('status mapping: new, working, lost and invalid reach MG; converted and delivered are held for an MG decision', async (t) => {
+test('status mapping: new, working, lost and invalid reach MG; converted and delivered set the Retail Order outcome', async (t) => {
   const expectations = { new: 'Not Contacted', working: 'Contacted', lost: 'Lost Lead', invalid: 'Not Qualified' };
   for (const [type, mg] of Object.entries(expectations)) {
     const harness = harnessFor(t, { lead: { lead_status: type === 'new' ? 'Contacted' : 'Not Contacted' } });
@@ -434,15 +434,83 @@ test('status mapping: new, working, lost and invalid reach MG; converted and del
     assert.equal(harness.db.tables.leads[0].lead_status, mg, type);
   }
   // converted and delivered set Enquiry Outcome = Retail Order (stored as
-  // "Purchase") and leave Enquiry Status alone.
+  // "Purchase"). A lead MG still has waiting (Not Contacted) also becomes
+  // Contacted, as Fusion Won does (24 Nov 2026).
   for (const type of ['converted', 'delivered']) {
     const harness = harnessFor(t);
     const result = await receive(harness, { id: 200001, status_type: type, leads: [{ id: DS_LEAD_ID }] });
     assert.equal(result.held, undefined, type);
-    assert.deepEqual(harness.oemWrites, [{ zohoLeadId: 'ZL1', fields: { Enquiry_Outcome: 'Purchase' } }], type);
+    assert.deepEqual(harness.oemWrites, [{ zohoLeadId: 'ZL1', fields: { Lead_Status: 'Contacted', Enquiry_Outcome: 'Purchase' } }], type);
     assert.equal(harness.db.tables.leads[0].enquiry_outcome, 'Purchase', type);
-    assert.equal(harness.db.tables.leads[0].lead_status, 'Not Contacted', type);
+    assert.equal(harness.db.tables.leads[0].lead_status, 'Contacted', type);
   }
+});
+
+test('a sale (converted / delivered) moves a waiting lead to Contacted; a progressed or Lost lead keeps its status', async (t) => {
+  for (const waiting of ['Not Contacted', 'Update Pending', '']) {
+    const harness = harnessFor(t, { lead: { lead_status: waiting } });
+    await receive(harness, { id: 200001, status_type: 'delivered', leads: [{ id: DS_LEAD_ID }] });
+    assert.equal(harness.oemWrites[0].fields.Lead_Status, 'Contacted', `from "${waiting}"`);
+    assert.equal(harness.db.tables.leads[0].lead_status, 'Contacted', `from "${waiting}"`);
+  }
+  for (const progressed of ['Contacted', 'Follow-up 1', 'Lost Lead']) {
+    const harness = harnessFor(t, { lead: { lead_status: progressed } });
+    await receive(harness, { id: 200001, status_type: 'converted', leads: [{ id: DS_LEAD_ID }] });
+    assert.deepEqual(harness.oemWrites, [{ zohoLeadId: 'ZL1', fields: { Enquiry_Outcome: 'Purchase' } }], progressed);
+    assert.equal(harness.db.tables.leads[0].lead_status, progressed, `${progressed} is kept`);
+  }
+});
+
+test('a repeated sale post moves a lead an earlier sale left waiting (the outcome is already Retail Order)', async (t) => {
+  const harness = harnessFor(t, { lead: { lead_status: 'Not Contacted', enquiry_outcome: 'Purchase' } });
+  await receive(harness, { id: 200001, status_type: 'delivered', leads: [{ id: DS_LEAD_ID }] });
+  assert.equal(harness.oemWrites.length, 1);
+  assert.equal(harness.oemWrites[0].fields.Lead_Status, 'Contacted');
+  assert.equal(harness.db.tables.leads[0].lead_status, 'Contacted');
+  assert.equal(harness.db.tables.leads[0].enquiry_outcome, 'Purchase');
+});
+
+test('a closed Service / Customer Care enquiry is Actioned, never Retail Order, and moves to Contacted (MG, 24 Nov 2026)', async (t) => {
+  for (const department of ['Service', 'Customer Care', ' service ']) {
+    for (const type of ['converted', 'delivered']) {
+      const harness = harnessFor(t, { lead: { lead_department: department, nature_of_enquiry: 'Service Booking' } });
+      await receive(harness, { id: 200001, status_type: type, leads: [{ id: DS_LEAD_ID }] });
+      assert.deepEqual(harness.oemWrites[0].fields, { Lead_Status: 'Contacted', Enquiry_Outcome: 'Outcome Not Required' }, `${department} ${type}`);
+      assert.equal(harness.db.tables.leads[0].enquiry_outcome, 'Outcome Not Required');
+      assert.equal(harness.db.tables.leads[0].lead_status, 'Contacted');
+    }
+  }
+});
+
+test('a closed Sales, General or Parts enquiry stays Retail Order (General / Parts until MG decides)', async (t) => {
+  for (const department of ['Sales', 'General', 'Parts', '']) {
+    const harness = harnessFor(t, { lead: { lead_department: department } });
+    await receive(harness, { id: 200001, status_type: 'converted', leads: [{ id: DS_LEAD_ID }] });
+    assert.equal(harness.oemWrites[0].fields.Enquiry_Outcome, 'Purchase', department || '(blank)');
+    assert.equal(harness.oemWrites[0].fields.Lead_Status, 'Contacted', department || '(blank)');
+  }
+});
+
+test('a re-posted sale on a Service lead MG already holds as Actioned / Contacted changes nothing', async (t) => {
+  for (const held of ['Outcome Not Required', 'Actioned']) {
+    const harness = harnessFor(t, { lead: { lead_department: 'Service', lead_status: 'Contacted', enquiry_outcome: held } });
+    const result = await receive(harness, { id: 200001, status_type: 'delivered', leads: [{ id: DS_LEAD_ID }] });
+    assert.deepEqual(harness.oemWrites, [], held);
+    assert.equal(result.skipped, true, held);
+  }
+});
+
+test('a re-posted sale corrects a Service lead an earlier post recorded as Retail Order', async (t) => {
+  const harness = harnessFor(t, { lead: { lead_department: 'Service', lead_status: 'Contacted', enquiry_outcome: 'Retail Order' } });
+  await receive(harness, { id: 200001, status_type: 'converted', leads: [{ id: DS_LEAD_ID }] });
+  assert.deepEqual(harness.oemWrites[0].fields, { Enquiry_Outcome: 'Outcome Not Required' });
+});
+
+test('a post with no sale never moves a waiting lead to Contacted', async (t) => {
+  const harness = harnessFor(t, { lead: { lead_status: 'Not Contacted' } });
+  await receive(harness, { id: 200001, leads: [{ id: DS_LEAD_ID }], test_drives: [{ status: 'Completed' }] });
+  assert.equal(Object.hasOwn(harness.oemWrites[0]?.fields || {}, 'Lead_Status'), false);
+  assert.equal(harness.db.tables.leads[0].lead_status, 'Not Contacted');
 });
 
 test('a Lost post writes the mapped Reason_for_Lost, Dealer Studio wording and the lost date', async (t) => {

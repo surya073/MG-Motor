@@ -27,6 +27,7 @@ const { translateFusionWebhook } = require('./adapters/fusionSdInbound');
 const { TEST_DRIVE_AT } = require('./adapters/testDriveDate');
 const {
   translateDealerStudioWebhook, mayApplyTestDriveOutcome, dropFormattingOnlyChanges, isOurProvider,
+  RETAIL_ORDER_OUTCOME: DEALER_STUDIO_SALE_OUTCOME, DEFAULT_OUTCOME_TARGET: DEALER_STUDIO_OUTCOME_TARGET,
 } = require('./adapters/dealerStudioInbound');
 const { applyDealerStudioPayloadRules } = require('./adapters/dealerStudioPayload');
 const { cachedForRun } = require('./mappingRunCache');
@@ -2867,6 +2868,30 @@ const FUSION_UNAPPLIED_STATUSES = new Set(['won', 'delivered']);
 const FUSION_WON_OUTCOME = 'Purchase';
 // MG's status for a lead the dealer has marked Won (only for a lead MG still has waiting).
 const FUSION_WON_STATUS = 'Contacted';
+
+// The outcome when a dealer closes an enquiry (Dealer Studio converted / delivered,
+// Fusion Won / Delivered) depends on the Lead Department (MG weekly meeting and
+// minutes, 24 Nov 2026): a Service or Customer Care enquiry (e.g. a Service Booking)
+// is never a Retail Order, it is "Actioned" (MG relabelled the Enquiry_Outcome value
+// "Outcome Not Required"). Sales, and for now every other department (General, Parts:
+// awaiting MG's answer), keep Retail Order.
+const ACTIONED_OUTCOME = 'Outcome Not Required';
+const ACTIONED_DEPARTMENTS = new Set(['service', 'customer care']);
+// MG's labels and stored values for the same outcome, for comparing with MG's record.
+const OUTCOME_ALIASES = Object.freeze({ 'retail order': 'purchase', actioned: 'outcome not required' });
+
+function closedEnquiryOutcome(leadRow) {
+  const department = String(leadRow?.lead_department ?? '').trim().toLowerCase();
+  return ACTIONED_DEPARTMENTS.has(department) ? ACTIONED_OUTCOME : FUSION_WON_OUTCOME;
+}
+
+function sameOutcome(a, b) {
+  const norm = (value) => {
+    const key = String(value ?? '').trim().toLowerCase();
+    return OUTCOME_ALIASES[key] || key;
+  };
+  return norm(a) === norm(b);
+}
 // Fusion "Lost" sets MG's status to Lost Lead and its Enquiry Outcome to Lost, unless
 // the lead already has an order outcome (those are final and are never replaced).
 const FUSION_LOST_STATUS = 'Lost Lead';
@@ -3131,7 +3156,8 @@ async function attemptInboundLeadUpdateCore(
           });
           return { skipped: true, reason: 'FUSION_STATUS_NOT_APPLIED' };
         }
-        mappedUpdate.enquiry_outcome = FUSION_WON_OUTCOME;
+        // Retail Order, or Actioned for a Service / Customer Care enquiry (24 Nov 2026).
+        mappedUpdate.enquiry_outcome = closedEnquiryOutcome(existingLeadRow);
         fusionDealerStatus = String(incomingStatusValue).trim();
         // A dealer that marks the lead Won has worked it, so a lead MG still has waiting
         // for the dealer (Not Contacted / Update Pending) also becomes Contacted
@@ -3249,6 +3275,29 @@ async function attemptInboundLeadUpdateCore(
     !FUSION_FINAL_OUTCOMES.has(String(existingLeadRow.enquiry_outcome ?? '').trim().toLowerCase())
   ) {
     mappedUpdate.enquiry_outcome = FUSION_LOST_OUTCOME;
+  }
+
+  // Dealer Studio converted / delivered (the dealer closed the enquiry) arrives as
+  // Enquiry Outcome = Retail Order with no status. Read from the post itself, so a
+  // repeat of it also corrects a lead an earlier post left wrong.
+  //  - The outcome follows the Lead Department: Actioned for Service / Customer Care,
+  //    Retail Order otherwise (closedEnquiryOutcome, 24 Nov 2026). An outcome MG
+  //    already holds is not written again.
+  //  - Like Fusion Won (MG, 17 Nov 2026), a dealer that closed the enquiry has worked
+  //    it, so a lead MG still has waiting (Not Contacted / Update Pending) also becomes
+  //    Contacted: an outcome never sits with Not Contacted (MG, 24 Nov 2026). A lead MG
+  //    has already progressed keeps its own status.
+  const dealerStudioClosed = dealerStudio && externalRecord[
+    fieldMappings.find((m) => m.source_field === 'enquiry_outcome')?.target_field || DEALER_STUDIO_OUTCOME_TARGET
+  ] === DEALER_STUDIO_SALE_OUTCOME;
+  if (dealerStudioClosed) {
+    const outcome = closedEnquiryOutcome(existingLeadRow);
+    if (sameOutcome(existingLeadRow.enquiry_outcome, outcome)) delete mappedUpdate.enquiry_outcome;
+    else mappedUpdate.enquiry_outcome = outcome;
+    if (!isStatusSync && !hasProgressedBeyondWaiting(existingLeadRow.lead_status)) {
+      mappedUpdate.lead_status = FUSION_WON_STATUS;
+      isStatusSync = true;
+    }
   }
 
   // Once Unhappy 10 has raised Unattended Alert, a repeated dealer

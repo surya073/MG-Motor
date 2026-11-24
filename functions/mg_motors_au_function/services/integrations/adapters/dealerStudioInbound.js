@@ -22,7 +22,8 @@
  *
  * Schema v3 (v2 plus a `provider` object) fields read here:
  *   - status_type: new, working, converted, delivered, lost, invalid. converted and
- *     delivered set Enquiry Outcome = Retail Order instead of a status. The guide
+ *     delivered set Enquiry Outcome = Retail Order instead of a status (the shared
+ *     path also moves a lead MG still has waiting to Contacted). The guide
  *     recommends mapping on the TYPE since dealers rename statuses. Read from
  *     `status_type` (or `lead_status_option.status_type`) and lowercased; the
  *     status name (`status`) is the fallback.
@@ -43,8 +44,9 @@ const DEFAULT_STATUS_TARGET = 'status';
 const DEFAULT_OUTCOME_TARGET = 'enquiry_outcome';
 const TEST_DRIVE_OUTCOME = 'Test Drive';
 // Converted and Delivered (a sale agreed / the car handed over) both set MG
-// Enquiry Outcome = Retail Order and leave Enquiry Status alone (MG decision,
-// 3 Nov 2026). Zoho takes the picklist's stored value, which for the label
+// Enquiry Outcome = Retail Order and carry no status (MG decision, 3 Nov 2026).
+// crmIntegrationService then moves a lead MG still has waiting (Not Contacted /
+// Update Pending) to Contacted, as for Fusion Won (24 Nov 2026). Zoho takes the picklist's stored value, which for the label
 // "Retail Order" is "Purchase" (see FUSION_OUTCOME_STATUS in crmIntegrationService).
 const RETAIL_ORDER_OUTCOME = 'Purchase';
 const SALE_STATUS_TYPES = new Set(['converted', 'delivered']);

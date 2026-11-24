@@ -28,8 +28,8 @@ const webhookRoutes = require('../routes/webhookRoutes');
 
 const SECRET = generateSigningSecret();
 
-async function fusionLead(t) {
-  const harness = setupOutbound(t, { lead: { lead_status: 'Contacted' } });
+async function fusionLead(t, lead = {}) {
+  const harness = setupOutbound(t, { lead: { lead_status: 'Contacted', ...lead } });
   harness.db.tables.integration_field_mappings.splice(0, Infinity, ...FIELD_PRESET);
   harness.db.tables.integration_status_mappings.splice(0, Infinity, ...STATUS_PRESET);
   harness.db.tables.notifications = [];
@@ -119,4 +119,25 @@ test('latestFromRows takes the newest dealer word and ignores other fields', () 
   assert.deepEqual(dealerStatusService.latestFromRows(rows), { status: 'Delivered', at: '2026-11-12T06:51:00.000Z' });
   assert.equal(dealerStatusService.latestFromRows([row([{ field: 'lost_reason', raw_dealer_value: 'Trade Value' }], 'x')]), null);
   assert.equal(dealerStatusService.latestFromRows([{ integration_logs: { field_changes: 'not json' } }]), null);
+});
+
+test('Won on a Service / Customer Care enquiry sets Actioned, not Retail Order (MG, 24 Nov 2026)', async (t) => {
+  for (const department of ['Service', 'Customer Care']) {
+    const h = await fusionLead(t, { lead_department: department, nature_of_enquiry: 'Service Booking' });
+    assert.equal((await h.deliver(fixtures.inboundFlatWebhookPayload({ status: 'Won' }))).status, 200);
+    assert.deepEqual(h.oemWrites.map((w) => w.fields), [{ Enquiry_Outcome: 'Outcome Not Required' }], department);
+    assert.equal((await latest(h)).status, 'Won', "the dealer's own word is still recorded");
+  }
+});
+
+test('Won on a waiting Service enquiry also moves it to Contacted', async (t) => {
+  const h = await fusionLead(t, { lead_department: 'Service', lead_status: 'Not Contacted' });
+  await h.deliver(fixtures.inboundFlatWebhookPayload({ status: 'Won' }));
+  assert.deepEqual(h.oemWrites.map((w) => w.fields), [{ Lead_Status: 'Contacted', Enquiry_Outcome: 'Outcome Not Required' }]);
+});
+
+test('Won on a Sales enquiry stays Retail Order', async (t) => {
+  const h = await fusionLead(t, { lead_department: 'Sales' });
+  await h.deliver(fixtures.inboundFlatWebhookPayload({ status: 'Won' }));
+  assert.deepEqual(h.oemWrites.map((w) => w.fields), [{ Enquiry_Outcome: 'Purchase' }]);
 });
