@@ -115,25 +115,56 @@ function installZohoWatchFake(t, options = {}) {
 }
 
 /**
- * A fake catalystApp: webhook_channels rows (ZCQL by module_name or
- * dealer_code), the outbound_sync_claims table (UNIQUE claim_key) used by the
- * durable renewal lease, and any other table as a recorder.
+ * A fake catalystApp: webhook_channels rows (UNIQUE channel_id, as in the live
+ * table; ZCQL by channel_id, module_name or dealer_code, ordered by
+ * CREATEDTIME or MODIFIEDTIME), the outbound_sync_claims table (UNIQUE
+ * claim_key) used by the durable renewal lease, and any other table as a
+ * recorder.
+ *
+ * @param {object} [options]
+ * @param {Array}   [options.existingRows]       webhook_channels rows present before the test
+ * @param {boolean} [options.failInsert]         every webhook_channels write (insert or update) throws
+ * @param {boolean} [options.failExtendedInsert] a webhook_channels write carrying owner_project_id throws (missing column)
+ * @param {boolean} [options.failLookup]         the ZCQL lookup by channel_id throws
+ * @param {Function} [options.beforeChannelInsert] awaited before each webhook_channels insert (for race tests)
+ * @param {object}  [options.integration]   the row getRow returns
+ * @param {object}  [options.integrations]  rows by ROWID for getRow (several dealers)
  */
-function buildWatchCatalystApp({ existingRows = [], failInsert = false, failExtendedInsert = false, integration } = {}) {
+function buildWatchCatalystApp({
+  existingRows = [], failInsert = false, failExtendedInsert = false, failLookup = false, beforeChannelInsert, integration, integrations,
+} = {}) {
   const inserted = [];
   const claims = new Map();
   let nextId = 1;
+  let clock = 0;
+  const writes = { insert: 0, update: 0 };
+  // Seeded rows get ROWIDs and creation/modification order in the order given.
+  const seeded = existingRows.map((r) => {
+    clock += 1;
+    return { ROWID: String(nextId += 1), __table: 'webhook_channels', __created: clock, __modified: clock, ...r };
+  });
+  const channelRows = () => [...seeded, ...inserted.filter((r) => r.__table === 'webhook_channels')];
+  const publicRow = (r) => Object.fromEntries(Object.entries(r).filter(([k]) => !k.startsWith('__')));
+  const order = (sql, rows) => {
+    const key = /ORDER BY MODIFIEDTIME/i.test(sql) ? '__modified' : '__created';
+    return [...rows].sort((a, b) => b[key] - a[key]);
+  };
   return {
     config: { projectId: '818000000022001', environment: 'Development' },
     zcql: () => ({
       executeZCQLQuery: async (sql) => {
         if (sql.includes('FROM webhook_channels')) {
-          const rows = [...existingRows, ...inserted.filter((r) => r.__table === 'webhook_channels')];
+          const rows = channelRows();
+          const byId = /channel_id = '([^']*)'/.exec(sql);
+          if (byId) {
+            if (failLookup) throw new Error('ZCQL lookup failed');
+            return rows.filter((r) => String(r.channel_id) === byId[1]).slice(0, 1).map((r) => ({ webhook_channels: publicRow(r) }));
+          }
           if (sql.includes("module_name = 'Dealers,Leads'")) {
-            return rows.filter((r) => r.module_name === 'Dealers,Leads').reverse().map((r) => ({ webhook_channels: r }));
+            return order(sql, rows.filter((r) => r.module_name === 'Dealers,Leads')).map((r) => ({ webhook_channels: publicRow(r) }));
           }
           const dealer = /dealer_code = '([^']*)'/.exec(sql);
-          if (dealer) return rows.filter((r) => r.dealer_code === dealer[1]).reverse().map((r) => ({ webhook_channels: r }));
+          if (dealer) return order(sql, rows.filter((r) => r.dealer_code === dealer[1])).map((r) => ({ webhook_channels: publicRow(r) }));
           return [];
         }
         if (sql.includes('FROM outbound_sync_claims')) {
@@ -146,7 +177,7 @@ function buildWatchCatalystApp({ existingRows = [], failInsert = false, failExte
     }),
     datastore: () => ({
       table: (name) => ({
-        getRow: async () => integration,
+        getRow: async (rowId) => (integrations && integrations[String(rowId)]) || integration,
         insertRow: async (fields) => {
           if (name === 'outbound_sync_claims') {
             if (claims.has(fields.claim_key)) throw new Error('Duplicate value for claim_key');
@@ -155,21 +186,44 @@ function buildWatchCatalystApp({ existingRows = [], failInsert = false, failExte
             return row;
           }
           if (name === 'webhook_channels') {
+            if (beforeChannelInsert) await beforeChannelInsert(fields);
             if (failInsert) throw new Error('insert failed');
             if (failExtendedInsert && 'owner_project_id' in fields) throw new Error('Invalid column owner_project_id');
+            if (channelRows().some((r) => String(r.channel_id) === String(fields.channel_id))) {
+              throw new Error('Duplicate value for channel_id. Please give a different value');
+            }
+            writes.insert += 1;
           }
-          const row = { ROWID: String(nextId += 1), __table: name, ...fields };
+          clock += 1;
+          const row = { ROWID: String(nextId += 1), __table: name, __created: clock, __modified: clock, ...fields };
           inserted.push(row);
-          return row;
+          return publicRow(row);
         },
-        updateRow: async (fields) => fields,
+        updateRow: async (fields) => {
+          if (name !== 'webhook_channels') return fields;
+          if (failInsert) throw new Error('update failed');
+          if (failExtendedInsert && 'owner_project_id' in fields) throw new Error('Invalid column owner_project_id');
+          const row = channelRows().find((r) => String(r.ROWID) === String(fields.ROWID));
+          if (!row) throw new Error(`No row with ROWID ${fields.ROWID}`);
+          if (channelRows().some((r) => r !== row && String(r.channel_id) === String(fields.channel_id ?? row.channel_id))) {
+            throw new Error('Duplicate value for channel_id. Please give a different value');
+          }
+          clock += 1;
+          Object.assign(row, fields, { __modified: clock });
+          writes.update += 1;
+          return publicRow(row);
+        },
         deleteRow: async (rowId) => {
           for (const [key, row] of claims) if (String(row.ROWID) === String(rowId)) claims.delete(key);
         },
       }),
     }),
     inserted,
-    channelRows: () => inserted.filter((r) => r.__table === 'webhook_channels'),
+    /** Every webhook_channels row (seeded and written), without internal fields, oldest first. */
+    channelRows: () => channelRows().map(publicRow),
+    /** Rows written by the test run (inserted), without internal fields. */
+    insertedChannelRows: () => inserted.filter((r) => r.__table === 'webhook_channels').map(publicRow),
+    channelWrites: writes,
     claims,
   };
 }

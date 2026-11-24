@@ -130,14 +130,81 @@ async function zohoOrgId(apiLabel, apiOrigin, accessToken) {
  * table without them gets the base row. A failed write is logged, not thrown:
  * the channel is live, and the next renewal finds it in Zoho's own list.
  */
+const CHANNEL_ID_PATTERN = /^[A-Za-z0-9_-]{1,50}$/;
+
+/** The recorded row for this channel id ({ ROWID, module_name, dealer_code }), or null. */
+async function findChannelRow(catalystApp, channelId) {
+  const id = String(channelId);
+  if (!CHANNEL_ID_PATTERN.test(id)) return null;
+  const rows = await catalystApp.zcql().executeZCQLQuery(
+    `SELECT ROWID, module_name, dealer_code FROM webhook_channels WHERE channel_id = '${id}' LIMIT 1`
+  );
+  return rows?.[0]?.webhook_channels || null;
+}
+
+/** For allocateChannelId: true when webhook_channels already has a row of this id. */
+function channelIdTakenLocally(catalystApp) {
+  return async (channelId) => Boolean(await findChannelRow(catalystApp, channelId));
+}
+
+function isDuplicateChannelError(err) {
+  return /duplicate/i.test(String(err?.message || err)) && /channel_id/i.test(String(err?.message || err));
+}
+
+/** True when `row` was recorded for the same scope (OEM, or this dealer) as `baseRow`. */
+function sameScope(row, baseRow) {
+  return String(row.module_name || '') === String(baseRow.module_name || '') &&
+    String(row.dealer_code || '') === String(baseRow.dealer_code || '');
+}
+
+/**
+ * Records the channel as Zoho reports it: updates the row of this channel_id
+ * when one exists (an in-place renewal keeps the same id, and channel_id is
+ * UNIQUE in webhook_channels), inserts one otherwise. If another instance
+ * inserts the same id between the lookup and the insert, the insert's
+ * duplicate error turns into an update of that row. A row of this id that
+ * belongs to a different scope (OEM vs dealer, or another dealer) is never
+ * overwritten.
+ */
 async function persistChannel(catalystApp, baseRow, extendedRow) {
   const table = catalystApp.datastore().table('webhook_channels');
+  let existing;
   try {
-    await table.insertRow({ ...baseRow, ...extendedRow });
-    return true;
-  } catch {
+    existing = await findChannelRow(catalystApp, baseRow.channel_id);
+  } catch (err) {
+    // An unreadable lookup falls through to the insert; a duplicate there is
+    // handled below by looking the row up again.
+    logger.error('zohoWebhookService', `Could not look up channel ${baseRow.channel_id} locally; inserting`, err);
+    existing = null;
+  }
+
+  const write = async (fields) => {
+    if (existing) return table.updateRow({ ROWID: existing.ROWID, ...fields });
     try {
-      await table.insertRow(baseRow);
+      return await table.insertRow(fields);
+    } catch (err) {
+      if (!isDuplicateChannelError(err)) throw err;
+      existing = await findChannelRow(catalystApp, baseRow.channel_id);
+      if (!existing) throw err;
+      if (!sameScope(existing, baseRow)) throw Object.assign(new Error('channel_id recorded for another scope'), { code: 'CHANNEL_SCOPE_MISMATCH' });
+      return table.updateRow({ ROWID: existing.ROWID, ...fields });
+    }
+  };
+
+  if (existing && !sameScope(existing, baseRow)) {
+    logger.error('zohoWebhookService', `Channel ${baseRow.channel_id} is live but its local row belongs to another scope (module ${existing.module_name}, dealer ${existing.dealer_code || 'none'}); not overwritten`);
+    return false;
+  }
+  try {
+    await write({ ...baseRow, ...extendedRow });
+    return true;
+  } catch (extendedErr) {
+    if (extendedErr?.code === 'CHANNEL_SCOPE_MISMATCH') {
+      logger.error('zohoWebhookService', `Channel ${baseRow.channel_id} is live but its local row belongs to another scope; not overwritten`);
+      return false;
+    }
+    try {
+      await write(baseRow);
       return true;
     } catch (err) {
       logger.error('zohoWebhookService', `Channel ${baseRow.channel_id} is live but could not be recorded locally`, err);
@@ -153,7 +220,41 @@ async function persistChannel(catalystApp, baseRow, extendedRow) {
  * confirmed, and only channels of this notify URL are touched, so another
  * project's channel is left alone.
  */
-async function renewOrCreateChannel({ scopeLabel, apiLabel, watchUrl, accessToken, notifyUrl, events, watchExtras }) {
+/**
+ * Zoho's watch API takes the channel_id from the caller, so a new channel's id
+ * is chosen here. It stays a millisecond timestamp (the shape Zoho already
+ * holds), but is never issued twice by this process: two registrations in the
+ * same millisecond (the cron renews dealers concurrently) get consecutive ids.
+ * webhook_channels.channel_id is UNIQUE across OEM and every dealer, so an id
+ * another instance has already recorded locally is skipped too.
+ */
+let lastIssuedChannelId = 0;
+const CHANNEL_ID_ATTEMPTS = 20;
+
+function nextChannelId(now = Date.now()) {
+  lastIssuedChannelId = Math.max(now, lastIssuedChannelId + 1);
+  return lastIssuedChannelId;
+}
+
+async function allocateChannelId(isChannelIdTaken) {
+  for (let attempt = 0; attempt < CHANNEL_ID_ATTEMPTS; attempt += 1) {
+    const id = nextChannelId();
+    if (!isChannelIdTaken) return id;
+    let taken;
+    try {
+      taken = await isChannelIdTaken(String(id));
+    } catch (err) {
+      // An unreadable table must not block registration; persistChannel
+      // still refuses to overwrite another scope's row.
+      logger.error('zohoWebhookService', `Could not check channel id ${id} locally; using it`, err);
+      return id;
+    }
+    if (!taken) return id;
+  }
+  throw new Error(`Could not allocate an unused channel id after ${CHANNEL_ID_ATTEMPTS} attempts`);
+}
+
+async function renewOrCreateChannel({ scopeLabel, apiLabel, watchUrl, accessToken, notifyUrl, events, watchExtras, isChannelIdTaken }) {
   const expiryDate = new Date(Date.now() + CHANNEL_LIFETIME_MS);
   const channelExpiry = toZohoDateTime(expiryDate);
   const body = (channelId) => ({
@@ -191,7 +292,7 @@ async function renewOrCreateChannel({ scopeLabel, apiLabel, watchUrl, accessToke
   }
 
   if (!channelId) {
-    const newId = Date.now();
+    const newId = await allocateChannelId(isChannelIdTaken);
     let response;
     try {
       logger.info('zohoWebhookService', `Calling watch API (create) for ${scopeLabel} notify_url=${notifyUrl}`);
@@ -272,6 +373,7 @@ async function registerWatchChannelsInternal(catalystApp) {
       notifyUrl,
       events: OEM_WATCH_EVENTS,
       watchExtras: { token: deriveZohoWatchToken(webhookToken) },
+      isChannelIdTaken: channelIdTakenLocally(catalystApp),
     });
     const orgId = await zohoOrgId('mg', watchUrl.origin, accessToken);
     await persistChannel(catalystApp, {
@@ -290,10 +392,14 @@ async function registerWatchChannelsInternal(catalystApp) {
 // operation claim inside covers every instance. Exported name unchanged.
 const registerWatchChannels = guardSweep('oemWebhookRenewal', registerWatchChannelsInternal);
 
-/** The latest recorded OEM channel row, or null. */
+/**
+ * The most recently written OEM channel row, or null. Ordered by MODIFIEDTIME,
+ * not CREATEDTIME: a renewal updates its channel's existing row in place, so
+ * the row just renewed may not be the newest one created.
+ */
 async function latestOemChannelRow(catalystApp) {
   const rows = await catalystApp.zcql().executeZCQLQuery(
-    `SELECT * FROM webhook_channels WHERE module_name = '${OEM_MODULE_NAME}' ORDER BY CREATEDTIME DESC LIMIT 1`
+    `SELECT * FROM webhook_channels WHERE module_name = '${OEM_MODULE_NAME}' ORDER BY MODIFIEDTIME DESC LIMIT 1`
   );
   return rows[0]?.webhook_channels || null;
 }
@@ -375,6 +481,7 @@ async function registerDealerWatchChannelInternal(catalystApp, integration) {
     // create/delete generated false Unhappy 7/4 events because those
     // records cannot be resolved through lead_integrations.
     events: DEALER_WATCH_EVENTS,
+    isChannelIdTaken: channelIdTakenLocally(catalystApp),
     watchExtras: {
       token: deriveZohoWatchToken(webhookSecret),
       return_affected_field_values: true,
@@ -421,5 +528,8 @@ module.exports = {
   registerDealerWatchChannel,
   isDealerWatchEligible,
   ensureOemWatchChannelFresh,
-  _test: { groupWatchEntries, coversEvents, CHANNEL_LIFETIME_MS },
+  _test: {
+    groupWatchEntries, coversEvents, persistChannel, allocateChannelId, nextChannelId, CHANNEL_LIFETIME_MS,
+    resetChannelIdsForTests: () => { lastIssuedChannelId = 0; },
+  },
 };
