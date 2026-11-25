@@ -32,6 +32,15 @@ export const dealerCrmIntegrationService = {
   },
 
   // { enabled: false } pauses; { enabled: true, queued: "push" | "skip" } resumes.
+  // "Remove connection": deletes the dealer's integration and its mappings and
+  // credentials. confirmDealerCode must equal dealerCode (typed by the admin).
+  async removeIntegration(dealerCode, confirmDealerCode) {
+    const { data } = await axiosInstance.delete(`${BASE}/${encodeURIComponent(dealerCode)}/integration`, {
+      data: { confirm_dealer_code: confirmDealerCode },
+    });
+    return data;
+  },
+
   async setPush(dealerCode, payload) {
     const { data } = await axiosInstance.put(`${BASE}/${encodeURIComponent(dealerCode)}/integration/push`, payload);
     return data;

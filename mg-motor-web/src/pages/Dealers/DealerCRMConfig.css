@@ -2061,3 +2061,49 @@
   gap: var(--space-2);
   margin-top: var(--space-4, 16px);
 }
+
+/* Delete-connection icon (top right of the dealer box) */
+.dealer-crm-config__remove-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-full);
+  color: var(--color-danger);
+  cursor: pointer;
+  transition: background-color var(--transition-fast) var(--ease-premium), border-color var(--transition-fast) var(--ease-premium);
+}
+
+.dealer-crm-config__remove-icon:hover:not(:disabled),
+.dealer-crm-config__remove-icon:focus-visible {
+  background-color: var(--color-danger-soft);
+  border-color: var(--color-danger);
+}
+
+.dealer-crm-config__remove-icon:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.dealer-crm-config__button--danger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background-color: var(--color-danger);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-full);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  color: #fff;
+  cursor: pointer;
+}
+
+.dealer-crm-config__button--danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

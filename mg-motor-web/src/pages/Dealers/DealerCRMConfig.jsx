@@ -625,6 +625,9 @@ export default function DealerCRMConfig() {
   const [webhookRegistering, setWebhookRegistering] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   const [pushDialog, setPushDialog] = useState(null);
+  // "Remove connection" dialog: the code typed to confirm, and whether it's running.
+  const [removeDialogOpen, setRemoveDialogOpen] = useState(false);
+  const [removeBusy, setRemoveBusy] = useState(false);
   const [pushChoice, setPushChoice] = useState("push");
 
   const [tab, setTab] = useState("connection");
@@ -831,6 +834,34 @@ export default function DealerCRMConfig() {
       ? `Lead push is on for ${selectedDealer.dealer_name}. ${result.pushed} queued lead(s) sent.`
       : `Lead push is on for ${selectedDealer.dealer_name}. ${result.skipped} queued lead(s) skipped; only leads from now on are sent.`)
   );
+
+  const openRemoveDialog = () => setRemoveDialogOpen(true);
+
+  // Deletes the dealer's integration (and its mappings and credentials) in the backend,
+  // then shows the dealer as Not Connected.
+  const confirmRemoveConnection = async () => {
+    if (!selectedDealer || removeBusy) return;
+    const dealer = selectedDealer;
+    setRemoveBusy(true);
+    try {
+      // The backend wants the code repeated, so a stray request can't delete the wrong dealer.
+      await dealerCrmIntegrationService.removeIntegration(dealer.dealer_code, dealer.dealer_code);
+      setRemoveDialogOpen(false);
+      setDealers((prev) => prev.map((d) => (
+        d.dealer_code === dealer.dealer_code ? { ...d, integration_status: null, crm_status: null } : d
+      )));
+      await loadIntegration(dealer);
+      showAlert("success", `The CRM connection for ${dealer.dealer_name} (${dealer.dealer_code}) was removed.`, {
+        title: "Connection removed",
+      });
+    } catch (err) {
+      showAlert("error", err?.response?.data?.message || err?.response?.data?.error || "Couldn't remove the connection. Try again.", {
+        title: "Remove failed",
+      });
+    } finally {
+      setRemoveBusy(false);
+    }
+  };
 
   const loadIntegration = async (dealer) => {
     setConfigLoading(true);
@@ -1404,6 +1435,36 @@ export default function DealerCRMConfig() {
           </div>
         </Modal>
       )}
+      {removeDialogOpen && selectedDealer && (
+        <Modal
+          title={`Delete the CRM connection for ${selectedDealer.dealer_name}?`}
+          onClose={() => !removeBusy && setRemoveDialogOpen(false)}
+          width={520}
+        >
+          <p className="dealer-crm-config__push-intro">
+            This deletes the {CRM_TYPE_LABELS[config.crm_type] || "CRM"} connection for{" "}
+            <strong>{selectedDealer.dealer_name} ({selectedDealer.dealer_code})</strong>, including its field mappings,
+            status mappings and saved credentials. The dealer goes back to <strong>Not Connected</strong>. It can't be undone.
+          </p>
+          <p className="dealer-crm-config__push-intro">
+            The activity log is kept. A dealer that has already been sent leads can't be removed; turn "Push leads" off instead.
+          </p>
+          <div className="dealer-crm-config__push-actions">
+            <button type="button" className="dealer-crm-config__button--outline" disabled={removeBusy} onClick={() => setRemoveDialogOpen(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="dealer-crm-config__button--danger"
+              disabled={removeBusy}
+              onClick={confirmRemoveConnection}
+            >
+              <Trash2 size={14} />
+              {removeBusy ? "Deleting..." : "Delete"}
+            </button>
+          </div>
+        </Modal>
+      )}
       <button type="button" className="dealer-crm-config__back" onClick={() => navigate(ROUTES.SETTINGS)}>
         <ArrowLeft size={15} />
         Back to Settings
@@ -1678,6 +1739,19 @@ export default function DealerCRMConfig() {
                   <Badge tone={isTopConnected ? "active" : "neutral"} fixed>
                     {isTopConnected ? "Connected" : "Not Connected"}
                   </Badge>
+                  {/* Only a saved integration can be removed (it has a ROWID). */}
+                  {!configLoading && config.ROWID && !isViewUser && (
+                    <button
+                      type="button"
+                      className="dealer-crm-config__remove-icon"
+                      onClick={openRemoveDialog}
+                      disabled={removeBusy}
+                      title="Delete this dealer's CRM connection"
+                      aria-label={`Delete the CRM connection for ${selectedDealer.dealer_name}`}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
                 </div>
               </div>
 

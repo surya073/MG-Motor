@@ -18,6 +18,8 @@ const pathPolicy = require('../services/integrations/pathPolicyService');
 const { signingSecretProblem } = require('../services/integrations/webhookVerificationService');
 
 const dealerPushQueueService = require('../services/integrations/dealerPushQueueService');
+const integrationRemovalService = require('../services/integrations/integrationRemovalService');
+const dealerListCache = require('../services/dealerListCache');
 
 const crypto = require('crypto');
 
@@ -165,6 +167,42 @@ router.put('/:dealerCode/integration/push', requireAdminRole, async (req, res) =
   } catch (err) {
     if (err.code === 'QUEUE_DECISION_REQUIRED') return res.status(409).json({ error: err.code, ...err.queued });
     logger.error('dealerCrmIntegrationRoutes', `PUT push failed for ${dealerCode}`, err);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+// "Remove connection": deletes the dealer's integration and its configuration
+// (integrationRemovalService). The caller must repeat the dealer code as
+// confirm_dealer_code, so a stray request cannot remove the wrong dealer.
+router.delete('/:dealerCode/integration', requireAdminRole, async (req, res) => {
+  const catalystApp = catalyst.initialize(req);
+  const { dealerCode } = req.params;
+  if (String(req.body?.confirm_dealer_code ?? '').trim() !== dealerCode) {
+    return res.status(400).json({ error: 'CONFIRMATION_REQUIRED', message: 'Type the dealer code to confirm.' });
+  }
+  try {
+    const integration = await crmIntegrationService.getIntegrationByDealerCode(catalystApp, dealerCode);
+    if (!integration) return res.status(404).json({ error: 'INTEGRATION_NOT_CONFIGURED' });
+    const result = await integrationRemovalService.removeDealerIntegration(catalystApp, integration);
+    fusionSdOAuthHelper.invalidateToken(integration.ROWID);
+    zohoCrmOAuthHelper.invalidateToken(integration.ROWID);
+    dealerListCache.clear();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    if (err.code === 'INTEGRATION_HAS_LEADS') {
+      return res.status(409).json({
+        error: err.code,
+        count: err.count,
+        message: `${err.count} lead(s) were already sent to this dealer's CRM, so the connection can't be removed. Turn "Push leads" off or switch the dealer to Dealer Portal instead.`,
+      });
+    }
+    if (err.code === 'INTEGRATION_HAS_WATCH_CHANNEL') {
+      return res.status(409).json({
+        error: err.code,
+        message: 'This dealer has a Zoho watch channel registered. Remove the channel first, then remove the connection.',
+      });
+    }
+    logger.error('dealerCrmIntegrationRoutes', `DELETE integration failed for ${dealerCode}`, err);
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 });
