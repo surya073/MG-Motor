@@ -462,6 +462,76 @@ function ActivityTimeline({ timeline, loading }) {
   });
 }
 
+/* ----------------------------------------------------------------
+   Dealer Activity: what the dealer logged in their own CRM
+------------------------------------------------------------------ */
+const DEALER_ACTIVITY_LABELS = {
+  phone: "Phone call",
+  sms: "SMS",
+  ai_sms: "AI SMS",
+  email: "Email",
+  note: "Note",
+  in_person: "In person",
+};
+
+function dealerActivityLabel(type) {
+  const key = String(type || "").toLowerCase();
+  if (DEALER_ACTIVITY_LABELS[key]) return DEALER_ACTIVITY_LABELS[key];
+  const words = key.replace(/[_-]+/g, " ").trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : "Activity";
+}
+
+function DealerActivityIcon({ type }) {
+  const key = String(type || "").toLowerCase();
+  if (key === "phone") return <PhoneIcon size={13} />;
+  if (key === "email") return <MailIcon size={13} />;
+  if (key === "in_person") return <UserIcon size={13} />;
+  return <NoteIcon size={13} />;
+}
+
+// Dealer times are UTC ISO strings; shown in Sydney time, e.g. "25 Nov 2026, 11:39 am".
+function formatDealerActivityTime(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleString("en-AU", {
+    timeZone: "Australia/Sydney",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function DealerActivityList({ activities, loading }) {
+  if (loading) {
+    return (
+      <li className="lead-detail__timeline-empty" aria-busy="true" style={{ listStyle: "none", padding: 0 }}>
+        <CompactListSkeleton rows={2} />
+      </li>
+    );
+  }
+  if (!activities || activities.length === 0) {
+    return <li className="lead-detail__timeline-empty">No calls, messages or notes from the dealer yet.</li>;
+  }
+  // Newest first: the latest contact attempt is what an operator looks for.
+  return [...activities].reverse().map((activity) => (
+    <li className="lead-detail__timeline-item lead-detail__timeline-item--neutral" key={activity.id}>
+      <span className="lead-detail__timeline-dot lead-detail__timeline-dot--neutral">
+        <DealerActivityIcon type={activity.event_type} />
+      </span>
+      <div>
+        <div className="lead-detail__timeline-title-row">
+          <p className="lead-detail__timeline-title">{dealerActivityLabel(activity.event_type)}</p>
+          {activity.user_name && <span className="lead-detail__timeline-badge lead-detail__timeline-badge--neutral">{activity.user_name}</span>}
+        </div>
+        {activity.description && <p className="lead-detail__timeline-detail">{activity.description}</p>}
+        <p className="lead-detail__timeline-time">{formatDealerActivityTime(activity.created_at)}</p>
+      </div>
+    </li>
+  ));
+}
+
 function normalize(value) {
   return (value ?? "").toString().trim().toLowerCase().replace(/[-_]+/g, " ");
 }
@@ -1007,6 +1077,8 @@ export default function LeadDetailView({ lead, onBack, onLeadChanged }) {
   const [timeline, setTimeline] = useState([]);
   const [timelineLoading, setTimelineLoading] = useState(true);
   const [timelineOffcanvasOpen, setTimelineOffcanvasOpen] = useState(false);
+  const [dealerActivities, setDealerActivities] = useState({ available: true, activities: [] });
+  const [dealerActivitiesLoading, setDealerActivitiesLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [updatedAt, setUpdatedAt] = useState(() => new Date());
   const { showAlert } = useAlerts();
@@ -1033,12 +1105,33 @@ export default function LeadDetailView({ lead, onBack, onLeadChanged }) {
     loadTimeline().catch(() => {});
   }, [loadTimeline]);
 
-  // Reloads the lead (and the list behind it) and its activity timeline.
+  // Calls, SMS, emails and notes the dealer logged in their CRM (Dealer Studio today).
+  const loadDealerActivities = useCallback(async ({ quiet = false } = {}) => {
+    if (!lead.crm_record_id) {
+      setDealerActivitiesLoading(false);
+      return;
+    }
+    if (!quiet) setDealerActivitiesLoading(true);
+    try {
+      setDealerActivities(await adminDashboardService.getLeadDealerActivities(lead.crm_record_id));
+    } catch (err) {
+      if (!quiet) setDealerActivities({ available: false, activities: [] });
+      else throw err;
+    } finally {
+      setDealerActivitiesLoading(false);
+    }
+  }, [lead.crm_record_id]);
+
+  useEffect(() => {
+    loadDealerActivities().catch(() => {});
+  }, [loadDealerActivities]);
+
+  // Reloads the lead (and the list behind it), its activity timeline and dealer activity.
   const handleRefresh = async () => {
     if (refreshing) return;
     setRefreshing(true);
     try {
-      await Promise.all([onLeadChanged?.(), loadTimeline({ quiet: true })]);
+      await Promise.all([onLeadChanged?.(), loadTimeline({ quiet: true }), loadDealerActivities({ quiet: true })]);
       setUpdatedAt(new Date());
     } catch (err) {
       showAlert("error", "Couldn't refresh this lead. Try again.");
@@ -1079,6 +1172,11 @@ export default function LeadDetailView({ lead, onBack, onLeadChanged }) {
   const path = resolveDisplayPath(lead);
 
   const journeyPaths = getDistinctPaths(timeline);
+
+  // Only dealers whose CRM sends activities get the card, plus any lead that already has some.
+  const showDealerActivity =
+    dealerActivities.available &&
+    (crmBadgeTone(lead.dealer_crm || lead.connected_crm) === "studio" || dealerActivities.activities.length > 0);
 
   // The reason behind the CURRENT path, taken from the most recent failure
   // on this lead. getLeadActivityTimeline returns oldest-first, so the last
@@ -1319,6 +1417,24 @@ export default function LeadDetailView({ lead, onBack, onLeadChanged }) {
           )}
         </section>
       </div>
+
+      {/* ========================================================== DEALER ACTIVITY ========================================================== */}
+      {showDealerActivity && (
+        <section className="lead-detail__group lead-detail__timeline-card">
+          <h3>
+            <span className="lead-detail__group-icon">
+              <PhoneIcon size={15} />
+            </span>
+            Dealer Activity
+            {!dealerActivitiesLoading && dealerActivities.activities.length > 0 && ` (${dealerActivities.activities.length})`}
+          </h3>
+          <div className="lead-detail__timeline-scroll">
+            <ul className="lead-detail__timeline">
+              <DealerActivityList activities={dealerActivities.activities} loading={dealerActivitiesLoading} />
+            </ul>
+          </div>
+        </section>
+      )}
 
       {/* ========================================================== DEALER REMARKS ========================================================== */}
       <section className="lead-detail__group lead-detail__remarks-card">

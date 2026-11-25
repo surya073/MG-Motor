@@ -33,6 +33,7 @@ const { applyDealerStudioPayloadRules } = require('./adapters/dealerStudioPayloa
 const { cachedForRun } = require('./mappingRunCache');
 const sentPayloadSnapshot = require('./sentPayloadSnapshot');
 const dealerStatusService = require('./dealerStatusService');
+const leadActivityService = require('./leadActivityService');
 
 const DEALERS_TABLE = 'dealers';
 const DEALER_INTEGRATIONS_TABLE = 'dealer_integrations';
@@ -2184,6 +2185,16 @@ async function mappedExternalLeadIds(catalystApp, integration, ids) {
   return ids.filter((id) => found.has(id));
 }
 
+/** MG lead ids (crm_record_id) of the dealer's lead ids that MG has a mapping for. */
+async function zohoLeadIdsForExternal(catalystApp, integration, externalIds) {
+  if (externalIds.length === 0) return [];
+  const list = externalIds.map((id) => `'${safeQuoteForZcql(id)}'`).join(', ');
+  const rows = await catalystApp.zcql().executeZCQLQuery(
+    `SELECT zoho_lead_id FROM ${LEAD_INTEGRATIONS_TABLE} WHERE integration_id = ${integration.ROWID} AND external_crm_lead_id IN (${list}) LIMIT 50`
+  );
+  return [...new Set(rows.map((row) => row[LEAD_INTEGRATIONS_TABLE]?.zoho_lead_id).filter(Boolean).map(String))];
+}
+
 /**
  * Dealer Studio Lead Cluster Webhook (adapters/dealerStudioInbound.js). The
  * body is the whole cluster and most posts carry no status change, so a post
@@ -2249,7 +2260,7 @@ async function processInboundWebhookForDealerStudio(catalystApp, integration, ex
       `Dealer Studio webhook for cluster ${translated.clusterId || 'unknown'} (dealer ${integration.dealer_code}): ${translated.skippedVehicle.join(' and ')} not in MG's list, not applied`
     );
   }
-  if (!translated.hasUpdate) {
+  if (!translated.hasUpdate && !translated.hasLeadEvents) {
     logger.info(
       'crmIntegrationService',
       `Dealer Studio webhook for cluster ${translated.clusterId || 'unknown'} (dealer ${integration.dealer_code}) has no status, outcome or editable field; nothing to apply to MG`
@@ -2262,6 +2273,26 @@ async function processInboundWebhookForDealerStudio(catalystApp, integration, ex
     targets = await mappedExternalLeadIds(catalystApp, integration, [translated.clusterId]);
   }
   if (targets.length === 0) targets = await leadIdsByProviderId(catalystApp, integration, translated.provider);
+
+  // The dealer's activity log (calls, SMS, emails, notes) is kept for the portal,
+  // against every MG lead of the cluster. Never fails or holds the webhook.
+  if (translated.hasLeadEvents && targets.length > 0) {
+    await leadActivityService.recordDealerActivities(catalystApp, {
+      zohoLeadIds: await zohoLeadIdsForExternal(catalystApp, integration, targets),
+      integration,
+      events: translated.leadEvents,
+      snapshotAt: translated.snapshotAt,
+      complete: translated.leadEventsComplete,
+    });
+  }
+
+  if (!translated.hasUpdate) {
+    logger.info(
+      'crmIntegrationService',
+      `Dealer Studio webhook for cluster ${translated.clusterId || 'unknown'} (dealer ${integration.dealer_code}) has no status, outcome or editable field; nothing to apply to MG`
+    );
+    return { ok: true, skipped: true, reason: 'NO_STATUS_IN_WEBHOOK' };
+  }
   if (targets.length === 0) targets = [candidates[0]];
 
   // A completed test drive is an inbound enquiry outcome. It needs a mapping

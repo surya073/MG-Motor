@@ -591,6 +591,42 @@ test('provider reconciliation: lead ids still win over provider_id', async (t) =
   assert.deepEqual(harness.oemWrites.map((w) => w.zohoLeadId), ['ZL2']);
 });
 
+// Shape of a real v3 update (Dealer Studio, 25 Nov 2026): the root `provider` is the
+// platform name as a string, and MG's provider sits on each lead as { id, name }.
+const LIVE_SHAPE = {
+  id: 424242,
+  provider: 'Dealer Studio',
+  status_type: 'Working',
+  lead_status_option: { id: 4746, name: 'Attempted Contact', status_type: 'working' },
+  leads: [{ id: 888888, provider: { id: 'ENQ-1', name: 'MG Leads Exchange' } }],
+};
+
+test('live v3 shape: the provider is read from leads[].provider { id, name }', () => {
+  assert.deepEqual(translateDealerStudioWebhook(LIVE_SHAPE).provider, { name: 'MG Leads Exchange', providerId: 'ENQ-1' });
+  // A root provider object still wins over the per-lead one.
+  const both = { ...LIVE_SHAPE, provider: { name: 'MG Leads Exchange', provider_id: 'ENQ-ROOT' } };
+  assert.equal(translateDealerStudioWebhook(both).provider.providerId, 'ENQ-ROOT');
+  // MG's provider is preferred when a cluster carries leads from several providers.
+  const mixed = { ...LIVE_SHAPE, leads: [{ id: 1, provider: { id: 'X-9', name: 'Carsales' } }, ...LIVE_SHAPE.leads] };
+  assert.equal(translateDealerStudioWebhook(mixed).provider.providerId, 'ENQ-1');
+  // The platform string alone is not a provider.
+  assert.equal(translateDealerStudioWebhook({ id: 1, provider: 'Dealer Studio', leads: [{ id: 2 }] }).provider, null);
+});
+
+test('live v3 shape: unknown lead ids are matched through leads[].provider.id', async (t) => {
+  const harness = harnessFor(t);
+  await receive(harness, LIVE_SHAPE);
+  assert.deepEqual(harness.oemWrites.map((w) => w.zohoLeadId), ['ZL1']);
+  assert.equal(harness.db.tables.leads[0].lead_status, 'Contacted');
+});
+
+test('live v3 shape: another provider on the lead is not matched', async (t) => {
+  const harness = harnessFor(t);
+  const other = { ...LIVE_SHAPE, leads: [{ id: 888888, provider: { id: 'ENQ-1', name: 'Carsales' } }] };
+  await assert.rejects(() => receive(harness, other), (err) => err.code === 'LEAD_MAPPING_NOT_FOUND');
+  assert.deepEqual(harness.oemWrites, []);
+});
+
 // --------------------------------------------------------------- 10. regression
 
 test('other CRM types are untouched by the Dealer Studio rules', () => {

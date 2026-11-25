@@ -34,6 +34,10 @@
  *     Parsed and validated; MG has no field to hold them, so they are logged only.
  *   - provider: { name, provider_id }, the provider name and the id MG sent
  *     (the MG Enquiry ID), used to find the lead when its ids do not match.
+ *     Live v3 posts carry it on each lead instead, as leads[].provider { id, name }
+ *     (see parseProvider).
+ *   - lead_events[]: the dealer's activities (calls, SMS, emails, notes). Returned as
+ *     `leadEvents` for leadActivityService to store; nothing in them is written to MG.
  * Malformed entries are skipped, never thrown on.
  */
 
@@ -129,6 +133,33 @@ function parseTestDrives(list) {
       checkedInAt: text(item.checked_in_at),
     }))
     .filter((item) => item.status || item.checkedOutAt || item.checkedInAt);
+}
+
+// A lead's activity log can outgrow the 50-item cap used for other lists.
+const MAX_LEAD_EVENTS = 300;
+
+/**
+ * lead_events[]: the dealer's activity log on the cluster (Dealer Studio, 25 Nov 2026):
+ *   { id, event_type, description, user: { id, name }, followup_status, created_at, updated_at }
+ * event_type is e.g. email, phone, sms, ai_sms, note, in_person. Every post carries the
+ * whole list (oldest first), so an event missing from a newer post was deleted. Consecutive
+ * SMS are one event whose description and updated_at change with each message.
+ * Entries without an id cannot be tracked across posts and are skipped.
+ */
+function parseLeadEvents(list) {
+  return (Array.isArray(list) ? list : [])
+    .slice(0, MAX_LEAD_EVENTS)
+    .filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+    .map((item) => ({
+      sourceEventId: text(item.id, 100),
+      eventType: text(item.event_type, 50)?.toLowerCase() ?? 'unknown',
+      description: text(item.description, 2000),
+      userName: text(item.user && typeof item.user === 'object' ? item.user.name : null, 255),
+      followupStatus: text(item.followup_status, 50),
+      createdAt: text(item.created_at, 40),
+      updatedAt: text(item.updated_at, 40) ?? text(item.created_at, 40),
+    }))
+    .filter((event) => event.sourceEventId !== null);
 }
 
 /** The lost reason as the shared path's lost-detail shape (see crmIntegrationService.lostReasonFields). */
@@ -228,11 +259,26 @@ function dropFormattingOnlyChanges(update, existingLead) {
   return dropped;
 }
 
-function parseProvider(value) {
+function providerFrom(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const name = text(value.name, 100);
-  const providerId = text(value.provider_id, 128);
+  const providerId = text(value.provider_id, 128) ?? text(value.id, 128);
   return name || providerId ? { name, providerId } : null;
+}
+
+/**
+ * The lead provider and the id MG sent (the MG Enquiry ID). The guide shows a root
+ * `provider: { name, provider_id }`; a real v3 update (Dealer Studio, 25 Nov 2026) has
+ * `provider: "Dealer Studio"` at the root (the platform, not the lead provider) and the
+ * provider on each lead as `leads[].provider: { id, name }`. The root object wins; otherwise
+ * the first lead provider that is MG's exchange, else the first lead provider at all (so
+ * another provider's lead is still recognised as not ours).
+ */
+function parseProvider(body) {
+  const root = providerFrom(body.provider);
+  if (root) return root;
+  const fromLeads = objects(body.leads).map((lead) => providerFrom(lead.provider)).filter(Boolean);
+  return fromLeads.find(isOurProvider) ?? fromLeads[0] ?? null;
 }
 
 /** Whether the provider on the webhook is MG's exchange (or unnamed, so not someone else's). */
@@ -307,7 +353,15 @@ function translateDealerStudioWebhook(payload, fieldMappings = []) {
     lost: parseLost(body, changedAt),
     appointments,
     testDrives,
-    provider: parseProvider(body.provider),
+    provider: parseProvider(body),
+    // The dealer's activity log, stored by leadActivityService; never applied to MG's CRM.
+    // Only a post that carries the list says anything about it: without one, nothing
+    // stored is touched (an absent list is not "every activity deleted").
+    hasLeadEvents: Array.isArray(body.lead_events),
+    leadEvents: parseLeadEvents(body.lead_events),
+    // A list cut at the cap is not the whole log, so its missing events are not deletions.
+    leadEventsComplete: Array.isArray(body.lead_events) && body.lead_events.length <= MAX_LEAD_EVENTS,
+    snapshotAt: changedAt,
     fieldEdits,
     skippedVehicle,
     syntheticMappings,

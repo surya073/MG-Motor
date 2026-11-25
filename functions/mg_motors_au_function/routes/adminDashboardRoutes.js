@@ -25,6 +25,7 @@ const { withCrmApiLimit } = require('../services/integrations/crmApiConcurrencyL
 const aiAssistantToolService = require('../services/aiAssistantToolService');
 const logger = require('../utils/logger');
 const { getLeadActivityDetails } = require('../services/leadActivityDetailService');
+const leadActivityService = require('../services/integrations/leadActivityService');
 const dealerListCache = require('../services/dealerListCache');
 const { adminSuggestions } = require('../services/searchSuggestionsService');
 
@@ -225,6 +226,13 @@ router.get('/admin/leads/:crmRecordId/timeline', requireAdminOrViewRole, async (
     logger.error('adminDashboardRoutes', `GET /admin/leads/${req.params.crmRecordId}/timeline failed`, err);
     res.status(502).json({ success: false, error: err.message });
   }
+});
+
+// Activities the dealer recorded in their own CRM (calls, SMS, emails, notes), oldest
+// first. `available: false` when the lead_activities table is not set up; never a 5xx.
+router.get('/admin/leads/:crmRecordId/dealer-activities', requireAdminOrViewRole, async (req, res) => {
+  const { available, activities } = await leadActivityService.getLeadActivities(res.locals.catalystApp, req.params.crmRecordId);
+  res.status(200).json({ success: true, available, count: activities.length, activities });
 });
 
 router.get('/admin/leads/summary', requireAdminOrViewRole, async (req, res) => {

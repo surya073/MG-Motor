@@ -91,6 +91,15 @@ export const adminDashboardService = {
     return data.timeline;
   },
 
+  // Activities the dealer recorded in their own CRM (calls, SMS, emails, notes),
+  // oldest first. `available` is false when the backend store is not set up.
+  async getLeadDealerActivities(crmRecordId) {
+    const { data } = await axiosInstance.get(
+      `/mg_motors_au_function/admin/leads/${crmRecordId}/dealer-activities`
+    );
+    return { available: data.available !== false, activities: data.activities || [] };
+  },
+
   // NEW — paginated / filterable Integration Error report. Powers the
   // "Integration Errors" table on the Lead Exchange Health dashboard.
   async getIntegrationLogs({ fromDate, toDate, dealerCode, scenarioCode, status, page = 1, pageSize = 25 } = {}) {
