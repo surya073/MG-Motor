@@ -12,6 +12,7 @@ const slaMonitorService = require('../services/integrations/slaMonitorService');
 const dealerReconciliationService = require('../services/integrations/dealerReconciliationService');
 const { backfillOemReferences } = require('../services/integrations/oemReferenceBackfillService');
 const { backfillDealerStudioLostOutcome } = require('../services/integrations/lostOutcomeBackfillService');
+const { backfillTestDriveContacted } = require('../services/integrations/testDriveStatusBackfillService');
 const dailyErrorReportService = require('../services/integrations/dailyErrorReportService');
 const webhookEventRetention = require('../services/integrations/webhookEventRetention');
 const logger = require('../utils/logger');
@@ -211,6 +212,34 @@ router.post('/cron/backfill-dealer-studio-lost-outcome', async (req, res) => {
     res.status(200).json({ success: true, ...result });
   } catch (err) {
     logger.error('cronRoutes', 'Dealer Studio Lost outcome backfill failed', err);
+    res.status(502).json({ success: false, error: err.message });
+  }
+});
+
+// One-off, idempotent: Dealer Studio / Fusion leads with Enquiry_Outcome = Test Drive
+// that MG still has waiting (Not Contacted / Update Pending) become Contacted
+// (re-checked live in the OEM CRM first; a progressed status is never replaced).
+// Writes only Lead_Status and its mirror. Body (optional): { dealerCodes, dryRun }.
+router.post('/cron/backfill-test-drive-contacted', async (req, res) => {
+  const providedSecret = req.headers['x-cron-secret'];
+  if (!providedSecret || providedSecret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+
+  try {
+    const catalystApp = usageContext.initialize(catalyst, req);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const result = await backfillTestDriveContacted(catalystApp, {
+      dealerCodes: body.dealerCodes,
+      dryRun: body.dryRun === true,
+    });
+    logger.info('cronRoutes', 'Test Drive -> Contacted backfill', {
+      dryRun: result.dryRun, candidates: result.candidates,
+      updated: result.updated.length, skipped: result.skipped.length, failed: result.failed.length,
+    });
+    res.status(200).json({ success: true, ...result });
+  } catch (err) {
+    logger.error('cronRoutes', 'Test Drive -> Contacted backfill failed', err);
     res.status(502).json({ success: false, error: err.message });
   }
 });

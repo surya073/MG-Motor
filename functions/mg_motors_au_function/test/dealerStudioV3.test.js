@@ -377,11 +377,40 @@ test('a Completed test drive sets MG Enquiry Outcome to Test Drive (with the sta
   assert.equal(harness.db.tables.leads[0].lead_status, 'Contacted');
 });
 
-test('a Completed test drive on its own (no status in the post) still sets the outcome', async (t) => {
+test('a Completed test drive on its own (no status in the post) sets the outcome and moves a waiting lead to Contacted', async (t) => {
   const harness = harnessFor(t);
   await receive(harness, { id: 200001, leads: [{ id: DS_LEAD_ID }], test_drives: [{ status: 'Completed' }] });
-  assert.deepEqual(harness.oemWrites, [{ zohoLeadId: 'ZL1', fields: { Enquiry_Outcome: 'Test Drive' } }]);
-  assert.equal(harness.db.tables.leads[0].lead_status, 'Not Contacted');
+  assert.deepEqual(harness.oemWrites, [{ zohoLeadId: 'ZL1', fields: { Lead_Status: 'Contacted', Enquiry_Outcome: 'Test Drive' } }]);
+  assert.equal(harness.db.tables.leads[0].lead_status, 'Contacted');
+  assert.equal(harness.db.tables.leads[0].enquiry_outcome, 'Test Drive');
+});
+
+test('a Completed test drive moves a waiting lead to Contacted; a progressed or Lost lead keeps its status (MG, 25 Nov 2026)', async (t) => {
+  for (const waiting of ['Not Contacted', 'Update Pending', '']) {
+    const harness = harnessFor(t, { lead: { lead_status: waiting } });
+    await receive(harness, { id: 200001, leads: [{ id: DS_LEAD_ID }], test_drives: [{ status: 'Completed' }] });
+    assert.equal(harness.oemWrites[0].fields.Lead_Status, 'Contacted', `from "${waiting}"`);
+    assert.equal(harness.db.tables.leads[0].lead_status, 'Contacted', `from "${waiting}"`);
+  }
+  for (const progressed of ['Contacted', 'Follow-up 1', 'Lost Lead']) {
+    const harness = harnessFor(t, { lead: { lead_status: progressed } });
+    await receive(harness, { id: 200001, leads: [{ id: DS_LEAD_ID }], test_drives: [{ status: 'Completed' }] });
+    assert.deepEqual(harness.oemWrites, [{ zohoLeadId: 'ZL1', fields: { Enquiry_Outcome: 'Test Drive' } }], progressed);
+    assert.equal(harness.db.tables.leads[0].lead_status, progressed, `${progressed} is kept`);
+  }
+});
+
+test('a Completed test drive with status type New still lands on Contacted, never Not Contacted', async (t) => {
+  const harness = harnessFor(t, { lead: { lead_status: 'Not Contacted' } });
+  await receive(harness, { id: 200001, status_type: 'new', leads: [{ id: DS_LEAD_ID }], test_drives: [{ status: 'Completed' }] });
+  assert.equal(harness.oemWrites[0].fields.Lead_Status, 'Contacted');
+  assert.equal(harness.db.tables.leads[0].lead_status, 'Contacted');
+});
+
+test('a Completed test drive in a Lost post leaves the lead Lost', async (t) => {
+  const harness = harnessFor(t, { lead: { lead_status: 'Not Contacted' } });
+  await receive(harness, { id: 200001, status_type: 'lost', leads: [{ id: DS_LEAD_ID }], test_drives: [{ status: 'Completed' }] });
+  assert.equal(harness.db.tables.leads[0].lead_status, 'Lost Lead');
 });
 
 test('a Completed test drive dates MG Test Drive Date by when it happened, not the webhook day', async (t) => {
@@ -400,8 +429,15 @@ test('a Completed test drive dates MG Test Drive Date by when it happened, not t
   assert.equal(harness.oemWrites[0].fields.Test_Drive_Date, '2026-11-19');
 });
 
+test('a re-posted Completed test drive moves a lead an earlier post left at Not Contacted', async (t) => {
+  const harness = harnessFor(t, { lead: { lead_status: 'Not Contacted', enquiry_outcome: 'Test Drive' } });
+  await receive(harness, { id: 200001, leads: [{ id: DS_LEAD_ID }], test_drives: [{ status: 'Completed' }] });
+  assert.deepEqual(harness.oemWrites, [{ zohoLeadId: 'ZL1', fields: { Lead_Status: 'Contacted' } }]);
+  assert.equal(harness.db.tables.leads[0].lead_status, 'Contacted');
+});
+
 test('the same Completed test drive posted again changes nothing', async (t) => {
-  const harness = harnessFor(t, { lead: { enquiry_outcome: 'Test Drive' } });
+  const harness = harnessFor(t, { lead: { lead_status: 'Contacted', enquiry_outcome: 'Test Drive' } });
   const result = await receive(harness, { id: 200001, leads: [{ id: DS_LEAD_ID }], test_drives: [{ status: 'Completed' }] });
   assert.equal(result.skipped, true);
   assert.deepEqual(harness.oemWrites, []);
@@ -506,9 +542,9 @@ test('a re-posted sale corrects a Service lead an earlier post recorded as Retai
   assert.deepEqual(harness.oemWrites[0].fields, { Enquiry_Outcome: 'Outcome Not Required' });
 });
 
-test('a post with no sale never moves a waiting lead to Contacted', async (t) => {
+test('a post with no sale and no completed test drive never moves a waiting lead to Contacted', async (t) => {
   const harness = harnessFor(t, { lead: { lead_status: 'Not Contacted' } });
-  await receive(harness, { id: 200001, leads: [{ id: DS_LEAD_ID }], test_drives: [{ status: 'Completed' }] });
+  await receive(harness, { id: 200001, leads: [{ id: DS_LEAD_ID }], test_drives: [{ status: 'In Progress' }] });
   assert.equal(Object.hasOwn(harness.oemWrites[0]?.fields || {}, 'Lead_Status'), false);
   assert.equal(harness.db.tables.leads[0].lead_status, 'Not Contacted');
 });

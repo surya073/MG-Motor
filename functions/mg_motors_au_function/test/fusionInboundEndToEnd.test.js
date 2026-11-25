@@ -315,3 +315,32 @@ test('a re-sent completed test drive never moves a Retail Order back to Test Dri
   assert.deepEqual(h.oemWrites, []);
   assert.equal(h.db.tables.leads[0].enquiry_outcome, 'Retail Order');
 });
+
+test('a Fusion completed test drive moves a waiting lead to Contacted (MG, 25 Nov 2026)', async (t) => {
+  for (const waiting of ['Not Contacted', 'Update Pending']) {
+    const h = await buckby(t, { mgStatus: waiting });
+    t.mock.method(oemCrmService, 'fetchOemLeadsByIds', async () => [{}]);
+    const result = await h.deliver({
+      lead_id: fixtures.FUSION_TEST_LEAD_ID,
+      dealer_id: fixtures.FUSION_TEST_DEALER_ID,
+      test_drive: { status: 'Completed', ends_at: '2026-11-20T03:00:00Z' },
+    });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.equal(h.oemWrites[0].fields.Lead_Status, 'Contacted', waiting);
+    assert.equal(h.oemWrites[0].fields.Enquiry_Outcome, 'Test Drive', waiting);
+    assert.equal(h.db.tables.leads[0].lead_status, 'Contacted', waiting);
+    t.mock.restoreAll();
+  }
+});
+
+test('a Fusion completed test drive keeps a status MG has already progressed', async (t) => {
+  const h = await buckby(t, { mgStatus: 'Follow-up 1' });
+  t.mock.method(oemCrmService, 'fetchOemLeadsByIds', async () => [{}]);
+  await h.deliver({
+    lead_id: fixtures.FUSION_TEST_LEAD_ID,
+    dealer_id: fixtures.FUSION_TEST_DEALER_ID,
+    test_drive: { status: 'Completed', ends_at: '2026-11-20T03:00:00Z' },
+  });
+  assert.equal(Object.hasOwn(h.oemWrites[0].fields, 'Lead_Status'), false);
+  assert.equal(h.db.tables.leads[0].lead_status, 'Follow-up 1');
+});

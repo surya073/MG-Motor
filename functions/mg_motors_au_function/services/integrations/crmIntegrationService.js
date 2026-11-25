@@ -2899,6 +2899,8 @@ const FUSION_UNAPPLIED_STATUSES = new Set(['won', 'delivered']);
 const FUSION_WON_OUTCOME = 'Purchase';
 // MG's status for a lead the dealer has marked Won (only for a lead MG still has waiting).
 const FUSION_WON_STATUS = 'Contacted';
+// MG's status for a lead with a completed test drive (only for a lead MG still has waiting).
+const TEST_DRIVE_STATUS = 'Contacted';
 
 // The outcome when a dealer closes an enquiry (Dealer Studio converted / delivered,
 // Fusion Won / Delivered) depends on the Lead Department (MG weekly meeting and
@@ -3128,6 +3130,10 @@ async function attemptInboundLeadUpdateCore(
     { excludeSourceFields: ['lead_status', 'accept_privacy_policy'] }
   );
 
+  // Whether this post itself carries a completed test drive, before an unchanged or
+  // backwards outcome is dropped below (read for the Test Drive -> Contacted rule).
+  const testDriveInPost = String(mappedUpdate.enquiry_outcome ?? '').trim().toLowerCase() === 'test drive';
+
   // Dealer Studio re-posts the cluster on every change, and Fusion re-sends the
   // newest test drive, so a completed test drive reappears after the lead has
   // become an order: it must not move the outcome backwards.
@@ -3327,6 +3333,27 @@ async function attemptInboundLeadUpdateCore(
     else mappedUpdate.enquiry_outcome = outcome;
     if (!isStatusSync && !hasProgressedBeyondWaiting(existingLeadRow.lead_status)) {
       mappedUpdate.lead_status = FUSION_WON_STATUS;
+      isStatusSync = true;
+    }
+  }
+
+  // A completed test drive (Dealer Studio or Fusion) means the dealer has worked the
+  // lead, so a lead whose outcome is Test Drive never stays waiting for the dealer:
+  // Not Contacted / Update Pending (MG's status, or the one this post maps to) becomes
+  // Contacted (MG, 25 Nov 2026). A lead MG has already progressed (Follow-up, Lost
+  // Lead, ...) keeps its status. Read from the post, so a repeat of it also corrects a
+  // lead an earlier post left at Not Contacted.
+  if (dealerStudio || integration.crm_type === 'FUSION_SD') {
+    const outcomeAfter = mappedUpdate.enquiry_outcome !== undefined
+      ? mappedUpdate.enquiry_outcome : existingLeadRow.enquiry_outcome;
+    const statusAfter = mappedUpdate.lead_status !== undefined
+      ? mappedUpdate.lead_status : existingLeadRow.lead_status;
+    if (
+      testDriveInPost &&
+      String(outcomeAfter ?? '').trim().toLowerCase() === 'test drive' &&
+      !hasProgressedBeyondWaiting(statusAfter)
+    ) {
+      mappedUpdate.lead_status = TEST_DRIVE_STATUS;
       isStatusSync = true;
     }
   }
