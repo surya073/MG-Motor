@@ -20,6 +20,8 @@ import {
   Globe,
   Pencil,
   Trash2,
+  Copy,
+  KeyRound,
   Store,
   Search as SearchIcon,
   X as ClearIcon,
@@ -302,6 +304,27 @@ const AUTOPLAY_DEFAULT_FIELD_MAPPINGS = [
   { source_field: "enquiry_model", target_field: "vehicle.model", data_type: "string", required: false },
   { source_field: "enquiry_id", target_field: "integrationRef", data_type: "string", required: true },
   { source_field: "nature_of_enquiry", target_field: "campaignId", data_type: "string", required: true },
+  { source_field: "lead_status", target_field: "progressName", data_type: "string", required: true },
+];
+
+// AutoPlay owns lead progress, so every row is inbound only: AutoPlay's progress
+// stage comes back as the MG status. The 13 stages AutoPlay returns for its dealers,
+// as in data/autoplayDocs/MG_X_AutoPlay_Field_Status_Mapping.xlsx (sheet 3).
+// Mirrored in the backend's autoPlayMappings.js INBOUND_STATUS_PRESET.
+const AUTOPLAY_DEFAULT_STATUS_MAPPINGS = [
+  { source_status: "Not Contacted", target_status: "Awaiting Action", inbound_only: true },
+  { source_status: "Attempted to Contact", target_status: "Email Sent", inbound_only: true },
+  { source_status: "Contacted", target_status: "Phone Call Made", inbound_only: true },
+  { source_status: "Contacted", target_status: "Meet & Qualify", inbound_only: true },
+  { source_status: "Contacted", target_status: "Test Drive", inbound_only: true },
+  { source_status: "Contacted", target_status: "Trade In Valuation/Appraisal", inbound_only: true },
+  { source_status: "Contacted", target_status: "Present Deal", inbound_only: true },
+  { source_status: "Finance Intro", target_status: "Finance", inbound_only: true },
+  { source_status: "Contacted", target_status: "Sold", inbound_only: true },
+  { source_status: "Contacted", target_status: "Delivered", inbound_only: true },
+  { source_status: "Follow-up 1", target_status: "Follow Up/Referral", inbound_only: true },
+  { source_status: "Contacted", target_status: "Closed - Won", inbound_only: true },
+  { source_status: "Lost Lead", target_status: "Closed - Lost", inbound_only: true },
 ];
 
 const AUTOPLAY_BASE_URL = "https://api.autoplayauto.com";
@@ -689,6 +712,11 @@ export default function DealerCRMConfig() {
   const [autoplayClientId, setAutoplayClientId] = useState("");
   const [autoplayClientSecret, setAutoplayClientSecret] = useState("");
   const [hasWebhookSigningSecret, setHasWebhookSigningSecret] = useState(false);
+  // AutoPlay webhook: whether the dealer has a WEBHOOK_SECRET, and the one just
+  // generated (shown once, never reloaded from the server).
+  const [hasAutoplayWebhookSecret, setHasAutoplayWebhookSecret] = useState(false);
+  const [generatedWebhookSecret, setGeneratedWebhookSecret] = useState("");
+  const [generatingWebhookSecret, setGeneratingWebhookSecret] = useState(false);
 
    const savedConfigSnapshotRef = useRef(EMPTY_CONFIG);
 
@@ -906,6 +934,8 @@ export default function DealerCRMConfig() {
       savedConfigSnapshotRef.current = loaded;
       setHasStoredCredential(Boolean(result?.hasCredential));
       setHasWebhookSigningSecret(Boolean(result?.hasWebhookSigningSecret));
+      setHasAutoplayWebhookSecret(Boolean(result?.hasWebhookSecret));
+      setGeneratedWebhookSecret("");
       resetCredentialInputs();
 
       const mappingsResult = await dealerCrmIntegrationService.getMappings(dealer.dealer_code);
@@ -1075,8 +1105,11 @@ export default function DealerCRMConfig() {
     setSaveSuccess(false);
     setFieldMappings(AUTOPLAY_DEFAULT_FIELD_MAPPINGS.map((mapping) => ({ ...mapping })));
     setEditingFieldRows(new Set());
-    // AutoPlay owns lead progress: no status rows until return updates exist.
-    setStatusMappings([]);
+  };
+
+  const applyAutoPlayDefaultStatusMap = () => {
+    setSaveSuccess(false);
+    setStatusMappings(AUTOPLAY_DEFAULT_STATUS_MAPPINGS.map((mapping) => ({ ...mapping })));
     setEditingStatusRows(new Set());
   };
 
@@ -1129,6 +1162,38 @@ export default function DealerCRMConfig() {
       showAlert("error", err?.response?.data?.error || "Refresh failed.", { title: "Refresh failed" });
     } finally {
       setPicklistRefreshing(false);
+    }
+  };
+
+  // The URL a dealer CRM posts its updates to: this portal's own host, the
+  // function's dealer webhook route and the dealer's code.
+  const dealerWebhookUrl = (dealerCode) =>
+    `${window.location.origin}/server/mg_motors_au_function/webhooks/dealers/${encodeURIComponent(dealerCode || "")}`;
+
+  const copyToClipboard = async (text, label) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showAlert("success", `${label} copied.`, { title: "Copied" });
+    } catch {
+      showAlert("error", "Couldn't copy. Select the text and copy it manually.", { title: "Copy failed" });
+    }
+  };
+
+  const handleGenerateWebhookSecret = async () => {
+    if (!selectedDealer) return;
+    if (hasAutoplayWebhookSecret && !window.confirm("A webhook secret already exists. Generating a new one replaces it, and AutoPlay must then use the new one. Continue?")) {
+      return;
+    }
+    setGeneratingWebhookSecret(true);
+    try {
+      const result = await dealerCrmIntegrationService.generateWebhookSecret(selectedDealer.dealer_code);
+      setGeneratedWebhookSecret(result?.webhookSecret || "");
+      setHasAutoplayWebhookSecret(true);
+      showAlert("success", "Webhook secret generated. Copy it now: it is shown only once.", { title: "Webhook secret" });
+    } catch (err) {
+      showAlert("error", err?.response?.data?.error || "Couldn't generate the webhook secret.", { title: "Webhook secret" });
+    } finally {
+      setGeneratingWebhookSecret(false);
     }
   };
 
@@ -2293,6 +2358,69 @@ export default function DealerCRMConfig() {
                                 AutoPlay's numeric ids for this dealer, sent with every lead. Dealer ID and the Test Drive
                                 campaign are required. Only Test Drive enquiries are sent to AutoPlay for now.
                               </span>
+
+                              <div className="dealer-crm-config__section-title">Updates from AutoPlay (webhook)</div>
+                              <div className="dealer-crm-config__field-row">
+                                <label>Webhook URL (POST)</label>
+                                <div style={{ display: "flex", gap: 8 }}>
+                                  <input value={dealerWebhookUrl(selectedDealer?.dealer_code)} readOnly style={{ flex: 1 }} />
+                                  <button
+                                    type="button"
+                                    className="dealer-crm-config__button--outline"
+                                    onClick={() => copyToClipboard(dealerWebhookUrl(selectedDealer?.dealer_code), "Webhook URL")}
+                                  >
+                                    <Copy size={14} />
+                                    Copy
+                                  </button>
+                                </div>
+                                <span className="dealer-crm-config__field-hint">
+                                  Give this URL to AutoPlay. They send each update with the secret below in the{" "}
+                                  <code>X-Webhook-Token</code> header (or an HMAC-SHA256 <code>X-Signature</code> of the body).
+                                </span>
+                              </div>
+                              <div className="dealer-crm-config__field-row">
+                                <label>Webhook secret</label>
+                                {generatedWebhookSecret ? (
+                                  <div style={{ display: "flex", gap: 8 }}>
+                                    <input value={generatedWebhookSecret} readOnly style={{ flex: 1, fontFamily: "monospace" }} />
+                                    <button
+                                      type="button"
+                                      className="dealer-crm-config__button--outline"
+                                      onClick={() => copyToClipboard(generatedWebhookSecret, "Webhook secret")}
+                                    >
+                                      <Copy size={14} />
+                                      Copy
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <input
+                                    type="password"
+                                    value={hasAutoplayWebhookSecret ? MASKED_CREDENTIAL_PLACEHOLDER : ""}
+                                    placeholder="No webhook secret yet"
+                                    disabled
+                                    readOnly
+                                  />
+                                )}
+                                <div>
+                                  <button
+                                    type="button"
+                                    className="dealer-crm-config__button--outline"
+                                    onClick={handleGenerateWebhookSecret}
+                                    disabled={generatingWebhookSecret || isViewUser || !config.ROWID}
+                                    title={!config.ROWID ? "Save the connection first" : viewOnlyTitle}
+                                  >
+                                    {generatingWebhookSecret ? <Loader2 size={14} className="spin" /> : <KeyRound size={14} />}
+                                    {hasAutoplayWebhookSecret ? "Generate new secret" : "Generate webhook secret"}
+                                  </button>
+                                </div>
+                                <span className="dealer-crm-config__field-hint">
+                                  {generatedWebhookSecret
+                                    ? "Copy this secret now and share it with AutoPlay through a secure channel (one-time link). It will not be shown again."
+                                    : hasAutoplayWebhookSecret
+                                    ? "A webhook secret is saved and encrypted. Generate a new one only to replace it."
+                                    : "Generate a secret for AutoPlay to authenticate its updates. It is saved encrypted and shown once."}
+                                </span>
+                              </div>
                             </>
                           )}
 
@@ -2614,6 +2742,19 @@ export default function DealerCRMConfig() {
                           >
                             <ShieldCheck size={14} />
                             Load verified AU008 map
+                          </button>
+                        )}
+
+                        {isAutoPlay && (
+                          <button
+                            type="button"
+                            className="dealer-crm-config__button--outline"
+                            onClick={applyAutoPlayDefaultStatusMap}
+                            disabled={saving || isViewUser}
+                            title={viewOnlyTitle}
+                          >
+                            <ShieldCheck size={14} />
+                            Load AutoPlay default map
                           </button>
                         )}
 

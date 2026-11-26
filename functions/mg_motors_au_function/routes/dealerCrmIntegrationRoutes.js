@@ -134,6 +134,11 @@ router.get('/:dealerCode/integration', requireAdminOrViewRole, async (req, res) 
     const extra = ['FUSION_SD', 'DEALER_STUDIO'].includes(integration.crm_type)
       ? { hasWebhookSigningSecret: await integrationAuthService.hasCredential(catalystApp, integration.ROWID, 'WEBHOOK_SIGNING_SECRET') }
       : {};
+    // AutoPlay posts its updates with the dealer's own WEBHOOK_SECRET (X-Webhook-Token
+    // or X-Signature); only whether one exists is reported.
+    if (integration.crm_type === 'AUTOPLAY') {
+      extra.hasWebhookSecret = await integrationAuthService.hasCredential(catalystApp, integration.ROWID, 'WEBHOOK_SECRET');
+    }
     res.json({ integration: safeConfig(integration), hasCredential, ...extra });
   } catch (err) {
     logger.error('dealerCrmIntegrationRoutes', `GET integration failed for ${dealerCode}`, err);

@@ -157,6 +157,16 @@ function getDealerStudioWebhookSecret() {
   return (process.env.DEALER_STUDIO_WEBHOOK_SECRET || '').trim();
 }
 
+/**
+ * AUTOPLAY_WEBHOOK_SECRET: one token for every AutoPlay dealer's return updates
+ * (sent as X-Webhook-Token, or used as the HMAC key of X-Signature), accepted
+ * alongside the dealer's own WEBHOOK_SECRET. Applies to AUTOPLAY integrations
+ * only. Unset = only per-dealer secrets.
+ */
+function getAutoPlayWebhookSecret() {
+  return (process.env.AUTOPLAY_WEBHOOK_SECRET || '').trim();
+}
+
 function getSharedWebhookConfig() {
   const secret = (process.env.FUSION_WEBHOOK_SECRET || '').trim();
   const dealerCodes = new Set(
@@ -601,6 +611,7 @@ module.exports = {
   getSharedWebhookConfig,
   getFusionUnsignedWebhookDealerCodes,
   getDealerStudioWebhookSecret,
+  getAutoPlayWebhookSecret,
   getOutboundRetryConfig,
   isLeadNamePartsEnabled,
   isFusionInboundV2Enabled,

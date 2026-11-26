@@ -6,7 +6,7 @@ const integrationAuthService = require('./integrationAuthService');
 const {
   signingSecretFingerprint, isUnsignedDealer, UNSIGNED_METHOD, UNSIGNED_FINGERPRINT,
 } = require('./fusionReturnChannelProof');
-const { getSharedWebhookConfig, getDealerStudioWebhookSecret, isFusionInboundV2Enabled } = require('../../config/env');
+const { getSharedWebhookConfig, getDealerStudioWebhookSecret, getAutoPlayWebhookSecret, isFusionInboundV2Enabled } = require('../../config/env');
 
 /**
  * webhookVerificationService.js
@@ -95,7 +95,10 @@ async function loadTokenSecrets(catalystApp, integration) {
   const sharedApplies = Boolean(
     shared.secret && shared.dealerCodes.has(String(integration.dealer_code || '').toLowerCase())
   );
-  const secrets = [webhookSecret, sharedApplies ? shared.secret : null].filter(Boolean);
+  // AUTOPLAY_WEBHOOK_SECRET: one env-var token for every AutoPlay dealer, accepted
+  // alongside the dealer's own secret. Never for any other CRM type.
+  const autoPlaySecret = integration.crm_type === 'AUTOPLAY' ? getAutoPlayWebhookSecret() : '';
+  const secrets = [webhookSecret, sharedApplies ? shared.secret : null, autoPlaySecret].filter(Boolean);
   return { secrets, unreadable };
 }
 

@@ -11,7 +11,9 @@ const autoPlayAdapter = require('../services/integrations/adapters/autoPlayAdapt
 const autoPlayRateBudget = require('../services/integrations/autoPlayRateBudget');
 const integrationAuthService = require('../services/integrations/integrationAuthService');
 const { applyAutoPlayPayloadRules, campaignFor, toUpdateBody } = require('../services/integrations/adapters/autoPlayPayload');
-const { FIELD_PRESET } = require('../services/integrations/adapters/autoPlayMappings');
+const { FIELD_PRESET, INBOUND_STATUS_PRESET } = require('../services/integrations/adapters/autoPlayMappings');
+const fs = require('fs');
+const path = require('path');
 const leadMappingService = require('../services/integrations/leadMappingService');
 const pathPolicy = require('../services/integrations/pathPolicyService');
 const crmIntegrationService = require('../services/integrations/crmIntegrationService');
@@ -77,6 +79,33 @@ test('every MG status is MG-only for AutoPlay (AutoPlay owns lead progress)', ()
 test('the default AutoPlay map covers every mandatory MG field', () => {
   const sources = FIELD_PRESET.map((row) => row.source_field);
   assert.deepEqual(leadMappingService.missingDeliveryMappingFields(sources, 'AUTOPLAY'), []);
+});
+
+// The 13 progress stages AutoPlay returned for dealer 2220 (lookups, 26 Nov 2026).
+const AUTOPLAY_STAGES = ['Awaiting Action', 'Email Sent', 'Phone Call Made', 'Meet & Qualify', 'Test Drive',
+  'Trade In Valuation/Appraisal', 'Present Deal', 'Finance', 'Sold', 'Delivered', 'Follow Up/Referral',
+  'Closed - Won', 'Closed - Lost'];
+const MG_LEAD_STATUSES = ['Not Contacted', 'Attempted to Contact', 'Contacted', 'Finance Intro', 'Follow-up 1', 'Lost Lead'];
+
+test('the default status map covers every AutoPlay stage once, onto real, dealer-settable MG statuses', () => {
+  assert.deepEqual(INBOUND_STATUS_PRESET.map((row) => row.dealer_status), AUTOPLAY_STAGES);
+  for (const { dealer_status, mg_status } of INBOUND_STATUS_PRESET) {
+    assert.ok(MG_LEAD_STATUSES.includes(mg_status), `${dealer_status} -> ${mg_status}`);
+    assert.equal(pathPolicy.isOemOnlyStatus(mg_status), false, mg_status);
+  }
+  assert.equal(INBOUND_STATUS_PRESET.find((row) => row.dealer_status === 'Closed - Lost').mg_status, 'Lost Lead');
+  assert.equal(INBOUND_STATUS_PRESET.find((row) => row.dealer_status === 'Awaiting Action').mg_status, 'Not Contacted');
+});
+
+test('the Dealer CRM page default maps mirror the backend presets (field rows and inbound-only status rows)', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '../../../mg-motor-web/src/pages/Dealers/DealerCRMConfig.jsx'), 'utf8');
+  const statusBlock = ui.slice(ui.indexOf('const AUTOPLAY_DEFAULT_STATUS_MAPPINGS'), ui.indexOf('const AUTOPLAY_BASE_URL'));
+  const uiStatus = [...statusBlock.matchAll(/source_status: "([^"]+)", target_status: "([^"]+)", inbound_only: true/g)]
+    .map(([, mg, dealer]) => ({ dealer_status: dealer, mg_status: mg }));
+  assert.deepEqual(uiStatus, INBOUND_STATUS_PRESET.map(({ dealer_status, mg_status }) => ({ dealer_status, mg_status })));
+  const fieldBlock = ui.slice(ui.indexOf('const AUTOPLAY_DEFAULT_FIELD_MAPPINGS'), ui.indexOf('const AUTOPLAY_DEFAULT_STATUS_MAPPINGS'));
+  const uiFields = [...fieldBlock.matchAll(/source_field: "([^"]+)", target_field: "([^"]+)"/g)].map(([, s, t]) => `${s}->${t}`);
+  assert.deepEqual(uiFields, FIELD_PRESET.map((row) => `${row.source_field}->${row.target_field}`));
 });
 
 test('only Test Drive enquiries have an AutoPlay campaign', () => {
@@ -298,6 +327,7 @@ test('a Test Drive lead is created in AutoPlay and its leadId stored', async (t)
   assert.equal(body.privacyPolicyAccepted, true);
   assert.equal(body.integrationRef, 'ENQ-1');
   assert.equal(Object.hasOwn(body, 'status'), false);
+  assert.equal(Object.hasOwn(body, 'progressName'), false, 'MG never sends a progress/status');
   assert.equal(Object.hasOwn(body, 'campaign'), false);
 
   const mapping = harness.db.tables.lead_integrations.find((row) => !row.__deleted);

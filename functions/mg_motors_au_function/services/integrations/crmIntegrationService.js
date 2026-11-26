@@ -4019,6 +4019,7 @@ module.exports = {
   getIntegrationsByDealerCode,
   getFieldMappings,
   getStatusMappings,
+  buildOutboundPayload,
   syncLeadToExternalCrm,
   isBeforeDealerStudioCutoff,
   isDealerPushPaused,

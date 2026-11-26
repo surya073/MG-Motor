@@ -28,10 +28,36 @@ const FIELD_PRESET_ROWS = [
   ['enquiry_model', 'vehicle.model', 'string', false, 'Model of interest (make is sent as MG)'],
   ['enquiry_id', 'integrationRef', 'string', true, 'MG Enquiry ID, kept by AutoPlay against our credential'],
   ['nature_of_enquiry', 'campaignId', 'string', true, "Nature of Enquiry; decides the campaign (Test Drive -> the dealer's Test Drive campaign id)"],
+  // Inbound only: AutoPlay's progress stage is read through this row. MG never
+  // sends a status (AutoPlay owns lead progress).
+  ['lead_status', 'progressName', 'string', true, 'Lead progress; comes back from AutoPlay only'],
 ];
 
 const FIELD_PRESET = FIELD_PRESET_ROWS.map(([source_field, target_field, data_type, required, note]) => ({
   source_field, target_field, data_type, required, note,
 }));
 
-module.exports = { FIELD_PRESET };
+// AutoPlay progress stage -> MG Lead_Status (inbound only; MG never sends a status).
+// The 13 stages read live for AutoPlay dealer 2220 (GET /api/v1/lookups/
+// contact-item-progress, 26 Nov 2026), mapped as in
+// data/autoplayDocs/MG_X_AutoPlay_Field_Status_Mapping.xlsx, sheet 3 (FI Digital
+// proposal, awaiting MG confirmation). The Enquiry Outcome part of that sheet (Test
+// Drive, Sold/Delivered/Closed - Won -> Retail Order, Closed - Lost -> Lost) is
+// applied by the AutoPlay return-update translator, not by these rows.
+const INBOUND_STATUS_PRESET = Object.freeze([
+  { dealer_status: 'Awaiting Action', mg_status: 'Not Contacted' },
+  { dealer_status: 'Email Sent', mg_status: 'Attempted to Contact' },
+  { dealer_status: 'Phone Call Made', mg_status: 'Contacted' },
+  { dealer_status: 'Meet & Qualify', mg_status: 'Contacted' },
+  { dealer_status: 'Test Drive', mg_status: 'Contacted' },
+  { dealer_status: 'Trade In Valuation/Appraisal', mg_status: 'Contacted' },
+  { dealer_status: 'Present Deal', mg_status: 'Contacted' },
+  { dealer_status: 'Finance', mg_status: 'Finance Intro' },
+  { dealer_status: 'Sold', mg_status: 'Contacted' },
+  { dealer_status: 'Delivered', mg_status: 'Contacted' },
+  { dealer_status: 'Follow Up/Referral', mg_status: 'Follow-up 1' },
+  { dealer_status: 'Closed - Won', mg_status: 'Contacted' },
+  { dealer_status: 'Closed - Lost', mg_status: 'Lost Lead' },
+]);
+
+module.exports = { FIELD_PRESET, INBOUND_STATUS_PRESET };

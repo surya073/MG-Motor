@@ -13,6 +13,7 @@ const dealerReconciliationService = require('../services/integrations/dealerReco
 const { backfillOemReferences } = require('../services/integrations/oemReferenceBackfillService');
 const { backfillDealerStudioLostOutcome } = require('../services/integrations/lostOutcomeBackfillService');
 const { backfillTestDriveContacted } = require('../services/integrations/testDriveStatusBackfillService');
+const { sendTestLead } = require('../services/integrations/testLeadService');
 const dailyErrorReportService = require('../services/integrations/dailyErrorReportService');
 const webhookEventRetention = require('../services/integrations/webhookEventRetention');
 const logger = require('../utils/logger');
@@ -240,6 +241,32 @@ router.post('/cron/backfill-test-drive-contacted', async (req, res) => {
     res.status(200).json({ success: true, ...result });
   } catch (err) {
     logger.error('cronRoutes', 'Test Drive -> Contacted backfill failed', err);
+    res.status(502).json({ success: false, error: err.message });
+  }
+});
+
+// Sends ONE FI Digital test lead per dealer through its real CRM connection
+// (adapter, mapping, credentials) to prove the connection end to end. Writes
+// nothing to leads, lead_integrations or MG's CRM; one TEST_LEAD log row per
+// dealer. Body: { dealerCodes: ['279501', ...] } (at most 10).
+router.post('/cron/send-test-lead', async (req, res) => {
+  const providedSecret = req.headers['x-cron-secret'];
+  if (!providedSecret || providedSecret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+  const codes = Array.isArray(req.body?.dealerCodes)
+    ? [...new Set(req.body.dealerCodes.map((code) => String(code).trim()).filter((code) => /^[A-Za-z0-9_-]{1,20}$/.test(code)))]
+    : [];
+  if (codes.length === 0 || codes.length > 10) {
+    return res.status(400).json({ success: false, error: 'Send 1 to 10 dealerCodes' });
+  }
+  try {
+    const catalystApp = usageContext.initialize(catalyst, req);
+    const results = [];
+    for (const code of codes) results.push(await sendTestLead(catalystApp, code));
+    res.status(200).json({ success: true, results });
+  } catch (err) {
+    logger.error('cronRoutes', 'Test lead send failed', err);
     res.status(502).json({ success: false, error: err.message });
   }
 });
