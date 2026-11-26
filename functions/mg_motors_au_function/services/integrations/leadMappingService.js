@@ -86,6 +86,14 @@ function missingDeliveryMappingFields(sourceFields, crmType) {
     if (covered.has('enquiry_model')) covered.add('vehicle_model');
     covered.add('lead_source');
   }
+  if (crmType === 'AUTOPLAY') {
+    // AutoPlay takes the name as contact.firstName / lastName and the model as
+    // vehicle.model. Source, dealer and campaign are AutoPlay ids from the
+    // dealer's settings, and AutoPlay owns lead progress (no status is sent).
+    if (covered.has('first_name') || covered.has('last_name')) covered.add('customer_name');
+    if (covered.has('enquiry_model')) covered.add('vehicle_model');
+    ['lead_source', 'dealer_code', 'lead_status'].forEach((field) => covered.add(field));
+  }
   if (crmType === 'FUSION_SD') {
     sourceFields.forEach((field) => {
       if (DERIVED_SOURCE_FIELDS[field]) covered.add(DERIVED_SOURCE_FIELDS[field]);

@@ -224,10 +224,11 @@ const FUSION_MG_ONLY_STATUSES = new Set(['pma unassigned']);
 /**
  * MG-only for this dealer's CRM type: never sent as a dealer status. Dealer
  * Studio owns the enquiry status (no lead_state on create; it comes back
- * through the webhook), so for it every MG status is MG-only.
+ * through the webhook), so for it every MG status is MG-only. AutoPlay owns lead
+ * progress the same way.
  */
 function isMgOnlyStatusFor(value, crmType) {
-  return crmType === 'DEALER_STUDIO' || isOemOnlyStatus(value) || (crmType === 'FUSION_SD' && FUSION_MG_ONLY_STATUSES.has(normalizeStatus(value)));
+  return crmType === 'DEALER_STUDIO' || crmType === 'AUTOPLAY' || isOemOnlyStatus(value) || (crmType === 'FUSION_SD' && FUSION_MG_ONLY_STATUSES.has(normalizeStatus(value)));
 }
 
 function getMgLeadStatusSet() {

@@ -129,6 +129,7 @@ const CRM_TYPE_LABELS = {
   ZOHO_CRM: "Zoho CRM",
   FUSION_SD: "Fusion SD",
   DEALER_STUDIO: "Dealer Studio",
+  AUTOPLAY: "AutoPlay",
 };
 
 const PAGE_SIZE_OPTIONS = [5, 10, 25, 50];
@@ -282,6 +283,28 @@ const DEALER_STUDIO_DEFAULT_STATUS_MAPPINGS = [
   { source_status: "Lost Lead", target_status: "lost", inbound_only: true },
   { source_status: "Not Qualified", target_status: "invalid", inbound_only: true },
 ];
+
+// AutoPlay (AutoPlay.Api 1.0.0 CreateLeadRequest). Dotted targets become nested
+// objects when the lead is sent. uniqueIdentifier (MG's lead id), origin "Api"
+// and the dealer's AutoPlay dealer / yard / source / campaign ids are added by
+// the backend; Nature of Enquiry decides the campaign (only Test Drive has one
+// so far). AutoPlay owns lead progress, so no status is mapped. Mirrored in the
+// backend's autoPlayMappings.js.
+const AUTOPLAY_DEFAULT_FIELD_MAPPINGS = [
+  { source_field: "first_name", target_field: "contact.firstName", data_type: "string", required: false },
+  { source_field: "last_name", target_field: "contact.lastName", data_type: "string", required: false },
+  { source_field: "email_address", target_field: "contact.email", data_type: "string", required: true },
+  { source_field: "mobile_number", target_field: "contact.mobile", data_type: "string", required: true },
+  { source_field: "postcode", target_field: "contact.postcode", data_type: "string", required: true },
+  { source_field: "receive_marketing_updates", target_field: "contact.optIn", data_type: "boolean", required: false },
+  { source_field: "accept_privacy_policy", target_field: "privacyPolicyAccepted", data_type: "boolean", required: true },
+  { source_field: "customer_message", target_field: "comments", data_type: "string", required: false },
+  { source_field: "enquiry_model", target_field: "vehicle.model", data_type: "string", required: false },
+  { source_field: "enquiry_id", target_field: "integrationRef", data_type: "string", required: true },
+  { source_field: "nature_of_enquiry", target_field: "campaignId", data_type: "string", required: true },
+];
+
+const AUTOPLAY_BASE_URL = "https://api.autoplayauto.com";
 
 const EMPTY_CONFIG = {
   integration_type: "PORTAL",
@@ -663,6 +686,8 @@ export default function DealerCRMConfig() {
   const [fusionAccessKey, setFusionAccessKey] = useState("");
   const [fusionSecretKey, setFusionSecretKey] = useState("");
   const [fusionSigningSecret, setFusionSigningSecret] = useState("");
+  const [autoplayClientId, setAutoplayClientId] = useState("");
+  const [autoplayClientSecret, setAutoplayClientSecret] = useState("");
   const [hasWebhookSigningSecret, setHasWebhookSigningSecret] = useState(false);
 
    const savedConfigSnapshotRef = useRef(EMPTY_CONFIG);
@@ -677,9 +702,11 @@ export default function DealerCRMConfig() {
       Boolean(oauthRefreshToken) ||
       Boolean(fusionAccessKey) ||
       Boolean(fusionSecretKey) ||
-      Boolean(fusionSigningSecret)
+      Boolean(fusionSigningSecret) ||
+      Boolean(autoplayClientId) ||
+      Boolean(autoplayClientSecret)
     );
-  }, [config, credentialValue, oauthClientId, oauthClientSecret, oauthRefreshToken, fusionAccessKey, fusionSecretKey, fusionSigningSecret]);
+  }, [config, credentialValue, oauthClientId, oauthClientSecret, oauthRefreshToken, fusionAccessKey, fusionSecretKey, fusionSigningSecret, autoplayClientId, autoplayClientSecret]);
 
   const [expandedDealers, setExpandedDealers] = useState(() => new Set());
   const [dealerPage, setDealerPage] = useState(1);
@@ -777,6 +804,8 @@ export default function DealerCRMConfig() {
     setFusionAccessKey("");
     setFusionSecretKey("");
     setFusionSigningSecret("");
+    setAutoplayClientId("");
+    setAutoplayClientSecret("");
     setEditingCredentials(false);
   };
 
@@ -934,6 +963,18 @@ export default function DealerCRMConfig() {
           update_http_method: "PUT",
         };
       }
+      if (key === "crm_type" && value === "AUTOPLAY") {
+        // AutoPlay: OAuth client credentials, POST /api/v1/leads, PATCH /api/v1/leads/{id}.
+        return {
+          ...prev,
+          crm_type: value,
+          base_url: prev.base_url || AUTOPLAY_BASE_URL,
+          create_lead_endpoint: "/api/v1/leads",
+          update_lead_endpoint: "/api/v1/leads/{externalLeadId}",
+          http_method: "POST",
+          update_http_method: "PATCH",
+        };
+      }
       if (key === "crm_type" && value === "DEALER_STUDIO") {
         // Dealer Studio: Bearer API key, POST /api/v1/leads, PUT /api/v1/leads/{id}.
         return {
@@ -1030,6 +1071,15 @@ export default function DealerCRMConfig() {
     setEditingFieldRows(new Set());
   };
 
+  const applyAutoPlayDefaultFieldMap = () => {
+    setSaveSuccess(false);
+    setFieldMappings(AUTOPLAY_DEFAULT_FIELD_MAPPINGS.map((mapping) => ({ ...mapping })));
+    setEditingFieldRows(new Set());
+    // AutoPlay owns lead progress: no status rows until return updates exist.
+    setStatusMappings([]);
+    setEditingStatusRows(new Set());
+  };
+
   const applyDealerStudioDefaultStatusMap = () => {
     setSaveSuccess(false);
     setStatusMappings(DEALER_STUDIO_DEFAULT_STATUS_MAPPINGS.map((mapping) => ({ ...mapping })));
@@ -1096,6 +1146,8 @@ export default function DealerCRMConfig() {
         fusion_secret_key: fusionSecretKey || undefined,
         fusion_webhook_signing_secret: fusionSigningSecret.trim() || undefined,
         webhook_signing_secret: fusionSigningSecret.trim() || undefined,
+        autoplay_client_id: autoplayClientId.trim() || undefined,
+        autoplay_client_secret: autoplayClientSecret.trim() || undefined,
       });
 
       showAlert("success", `Saved connection settings for ${selectedDealer.dealer_name}.`, {
@@ -1110,7 +1162,15 @@ export default function DealerCRMConfig() {
       clearSaveSuccessSoon();
     } catch (err) {
       const response = err?.response?.data;
-      const fieldLabels = { base_url: "Base URL", fusion_webhook_signing_secret: "Webhook signing secret", webhook_signing_secret: "Webhook signing secret" };
+      const fieldLabels = {
+        base_url: "Base URL",
+        fusion_webhook_signing_secret: "Webhook signing secret",
+        webhook_signing_secret: "Webhook signing secret",
+        autoplay_dealer_id: "AutoPlay dealer ID",
+        autoplay_yard_id: "AutoPlay yard ID",
+        autoplay_source_id: "AutoPlay source ID",
+        autoplay_campaign_id: "AutoPlay Test Drive campaign ID",
+      };
       const message = fieldLabels[response?.field] && response?.message
         ? `${fieldLabels[response.field]}: ${response.message}`
         : response?.error || "Couldn't save the configuration. Try again.";
@@ -1320,6 +1380,7 @@ export default function DealerCRMConfig() {
   const isZohoCrm = config.crm_type === "ZOHO_CRM";
   const isFusionSd = config.crm_type === "FUSION_SD";
   const isDealerStudio = config.crm_type === "DEALER_STUDIO";
+  const isAutoPlay = config.crm_type === "AUTOPLAY";
   const isConnectionVerified = isExternalCrm && CONNECTED_STATUSES.includes(config.status);
   const mappingsLocked = isExternalCrm && !isConnectionVerified;
   const isTopConnected = CONNECTED_STATUSES.includes(config.status);
@@ -1827,6 +1888,7 @@ export default function DealerCRMConfig() {
                                 { value: "ZOHO_CRM", label: "Zoho CRM (dealer's own account)" },
                                 { value: "FUSION_SD", label: "Fusion SD" },
                                 { value: "DEALER_STUDIO", label: "Dealer Studio" },
+                                { value: "AUTOPLAY", label: "AutoPlay" },
                               ]}
                             />
                           </div>
@@ -1845,18 +1907,20 @@ export default function DealerCRMConfig() {
                             <input
                               value={config.base_url}
                               onChange={(e) => handleConfigChange("base_url", e.target.value)}
-                              placeholder={isFusionSd ? "https://qa.fusionamspro.com/api/leadapi" : "https://dealer-crm.example.com"}
+                              placeholder={isFusionSd ? "https://qa.fusionamspro.com/api/leadapi" : isAutoPlay ? AUTOPLAY_BASE_URL : "https://dealer-crm.example.com"}
                             />
                             <span className="dealer-crm-config__field-hint">
                               {isFusionSd
                                 ? "Fusion SD's QA environment base URL shown above — replace with their production URL when Fusion provides one."
+                                : isAutoPlay
+                                ? "AutoPlay's API base URL (https://api.autoplayauto.com)."
                                 : isDealerStudio
                                 ? "Dealer Studio's API base URL — Dealer Studio support (support@dealerstudio.com.au) provides it with the API key and test dealership."
                                 : "The web address of the dealer's CRM's API — they can provide this, or it's shown in their CRM's developer/API settings."}
                             </span>
                           </div>
 
-                          {!isZohoCrm && !isFusionSd && !isDealerStudio && (
+                          {!isZohoCrm && !isFusionSd && !isDealerStudio && !isAutoPlay && (
                             <div className="dealer-crm-config__field-row">
                               <label>Authentication method</label>
                               <Dropdown
@@ -1959,6 +2023,70 @@ export default function DealerCRMConfig() {
                                 </>
                               )}
                             </>
+                          ) : isAutoPlay ? (
+                            showMaskedCredentials ? (
+                              <>
+                                <div className="dealer-crm-config__credentials-grid">
+                                  <div className="dealer-crm-config__field-row">
+                                    <label>Client ID</label>
+                                    <input type="password" value={MASKED_CREDENTIAL_PLACEHOLDER} disabled readOnly />
+                                  </div>
+                                  <div className="dealer-crm-config__field-row">
+                                    <label>Client Secret</label>
+                                    <input type="password" value={MASKED_CREDENTIAL_PLACEHOLDER} disabled readOnly />
+                                  </div>
+                                </div>
+                                <span className="dealer-crm-config__field-hint">
+                                  Credentials are saved and encrypted.{" "}
+                                  <button
+                                    type="button"
+                                    className="dealer-crm-config__link-button"
+                                    onClick={() => setEditingCredentials(true)}
+                                    disabled={isViewUser}
+                                    title={viewOnlyTitle}
+                                  >
+                                    Edit credentials
+                                  </button>
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                <div className="dealer-crm-config__credentials-grid">
+                                  <div className="dealer-crm-config__field-row">
+                                    <label>Client ID</label>
+                                    <input
+                                      type="password"
+                                      value={autoplayClientId}
+                                      onChange={(e) => setAutoplayClientId(e.target.value)}
+                                      placeholder="Enter AutoPlay Client ID"
+                                      autoComplete="new-password"
+                                    />
+                                  </div>
+                                  <div className="dealer-crm-config__field-row">
+                                    <label>Client Secret</label>
+                                    <input
+                                      type="password"
+                                      value={autoplayClientSecret}
+                                      onChange={(e) => setAutoplayClientSecret(e.target.value)}
+                                      placeholder="Enter AutoPlay Client Secret"
+                                      autoComplete="new-password"
+                                    />
+                                  </div>
+                                </div>
+                                <span className="dealer-crm-config__field-hint">
+                                  The OAuth client credentials AutoPlay issued for MG. They are encrypted when saved.
+                                </span>
+                                {hasStoredCredential && (
+                                  <button
+                                    type="button"
+                                    className="dealer-crm-config__link-button"
+                                    onClick={resetCredentialInputs}
+                                  >
+                                    Cancel
+                                  </button>
+                                )}
+                              </>
+                            )
                           ) : isFusionSd ? (
                             <>
                               {showMaskedCredentials ? (
@@ -2137,6 +2265,37 @@ export default function DealerCRMConfig() {
                             </div>
                           )}
 
+                          {isAutoPlay && (
+                            <>
+                              <div className="dealer-crm-config__section-title">AutoPlay account</div>
+                              <div className="dealer-crm-config__credentials-grid">
+                                {[
+                                  ["autoplay_dealer_id", "AutoPlay Dealer ID", "e.g. 2220"],
+                                  ["autoplay_yard_id", "AutoPlay Yard ID", "e.g. 10520"],
+                                  ["autoplay_source_id", "Source ID", "e.g. 2685"],
+                                  ["autoplay_campaign_id", "Book a Test Drive Campaign ID", "e.g. 17188"],
+                                ].map(([field, label, placeholder]) => (
+                                  <div className="dealer-crm-config__field-row" key={field}>
+                                    <label>{label}</label>
+                                    <input
+                                      value={config[field] || ""}
+                                      onChange={(e) => handleConfigChange(field, e.target.value.replace(/\D/g, ""))}
+                                      placeholder={placeholder}
+                                      inputMode="numeric"
+                                      autoComplete="off"
+                                      disabled={isViewUser}
+                                      title={viewOnlyTitle}
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                              <span className="dealer-crm-config__field-hint">
+                                AutoPlay's numeric ids for this dealer, sent with every lead. Dealer ID and the Test Drive
+                                campaign are required. Only Test Drive enquiries are sent to AutoPlay for now.
+                              </span>
+                            </>
+                          )}
+
                           <div className="dealer-crm-config__section-title">Lead endpoints</div>
 
                           <div className="dealer-crm-config__field-row-inline">
@@ -2145,7 +2304,7 @@ export default function DealerCRMConfig() {
                               <input
                                 value={config.create_lead_endpoint}
                                 onChange={(e) => handleConfigChange("create_lead_endpoint", e.target.value)}
-                                placeholder={isZohoCrm ? "/crm/v8/Leads" : isFusionSd ? "/v1/leads" : isDealerStudio ? "/api/v1/leads" : "/api/leads"}
+                                placeholder={isZohoCrm ? "/crm/v8/Leads" : isFusionSd ? "/v1/leads" : (isDealerStudio || isAutoPlay) ? "/api/v1/leads" : "/api/leads"}
                               />
                             </div>
                             <div>
@@ -2280,6 +2439,18 @@ export default function DealerCRMConfig() {
                           >
                             <ShieldCheck size={14} />
                             Load Dealer Studio default map
+                          </button>
+                        )}
+                        {isAutoPlay && (
+                          <button
+                            type="button"
+                            className="dealer-crm-config__button--outline"
+                            onClick={applyAutoPlayDefaultFieldMap}
+                            disabled={saving || isViewUser}
+                            title={viewOnlyTitle}
+                          >
+                            <ShieldCheck size={14} />
+                            Load AutoPlay default map
                           </button>
                         )}
                         {isFusionSd && (

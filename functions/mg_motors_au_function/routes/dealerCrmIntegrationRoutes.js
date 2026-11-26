@@ -8,6 +8,7 @@ const integrationAuthService = require('../services/integrations/integrationAuth
 const { findTargetFieldProblem, missingDeliveryMappingFields } = require('../services/integrations/leadMappingService');
 const { assertSafeUrl } = require('../services/integrations/adapters/genericRestAdapter');
 const fusionSdOAuthHelper = require('../services/integrations/adapters/fusionSdOAuthHelper');
+const autoPlayAdapter = require('../services/integrations/adapters/autoPlayAdapter');
 const zohoCrmOAuthHelper = require('../services/integrations/adapters/zohoCrmOAuthHelper');
 const { assertZohoEndpoint } = require('../services/integrations/adapters/zohoEndpointPolicy');
 const { isValidLeadId } = require('../services/integrations/adapters/fusionSdAdapter');
@@ -55,11 +56,13 @@ function safeConfig(integration) {
   const { ROWID, dealer_code, integration_type, crm_type, crm_name, base_url, auth_type,
     create_lead_endpoint, update_lead_endpoint, http_method, update_http_method,
      oauth_accounts_domain, webhook_enabled, webhook_id_field, outbound_enabled, inbound_enabled, push_enabled, push_from_at,
-    dealership_slug, dealership_location_id, status, last_tested_at, last_sync_at } = integration;
+    dealership_slug, dealership_location_id, status, last_tested_at, last_sync_at,
+    autoplay_dealer_id, autoplay_yard_id, autoplay_source_id, autoplay_campaign_id } = integration;
   return { ROWID, dealer_code, integration_type, crm_type, crm_name, base_url, auth_type,
     create_lead_endpoint, update_lead_endpoint, http_method, update_http_method,
     oauth_accounts_domain, webhook_enabled, webhook_id_field, outbound_enabled, inbound_enabled, push_enabled, push_from_at,
-    dealership_slug, dealership_location_id, status, last_tested_at, last_sync_at };
+    dealership_slug, dealership_location_id, status, last_tested_at, last_sync_at,
+    autoplay_dealer_id, autoplay_yard_id, autoplay_source_id, autoplay_campaign_id };
 }
 
 const { registerDealerWatchChannel } = require('../services/zohoWebhookService');
@@ -116,6 +119,12 @@ router.get('/:dealerCode/integration', requireAdminOrViewRole, async (req, res) 
         integrationAuthService.hasCredential(catalystApp, integration.ROWID, 'FUSION_SECRET_KEY'),
       ]);
       hasCredential = hasAccessKey && hasSecretKey;
+    } else if (integration.crm_type === 'AUTOPLAY') {
+      const [hasClientId, hasClientSecret] = await Promise.all([
+        integrationAuthService.hasCredential(catalystApp, integration.ROWID, 'AUTOPLAY_CLIENT_ID'),
+        integrationAuthService.hasCredential(catalystApp, integration.ROWID, 'AUTOPLAY_CLIENT_SECRET'),
+      ]);
+      hasCredential = hasClientId && hasClientSecret;
     } else {
       const credType = integrationAuthService.AUTH_TYPE_TO_CREDENTIAL_TYPE[integration.auth_type];
       hasCredential = credType ? await integrationAuthService.hasCredential(catalystApp, integration.ROWID, credType) : false;
@@ -186,6 +195,7 @@ router.delete('/:dealerCode/integration', requireAdminRole, async (req, res) => 
     const result = await integrationRemovalService.removeDealerIntegration(catalystApp, integration);
     fusionSdOAuthHelper.invalidateToken(integration.ROWID);
     zohoCrmOAuthHelper.invalidateToken(integration.ROWID);
+    autoPlayAdapter.invalidateToken(integration.ROWID);
     dealerListCache.clear();
     res.json({ ok: true, ...result });
   } catch (err) {
@@ -239,6 +249,8 @@ router.put('/:dealerCode/integration', requireAdminRole, async (req, res) => {
     const isZohoCrm = body.crm_type === 'ZOHO_CRM';
     const isFusionSd = body.crm_type === 'FUSION_SD';
     const isDealerStudio = body.crm_type === 'DEALER_STUDIO';
+    const isAutoPlay = body.crm_type === 'AUTOPLAY';
+    if (isAutoPlay && !body.base_url) body.base_url = autoPlayAdapter.DEFAULT_BASE_URL;
     if (isZohoCrm && body.integration_type === 'EXTERNAL_CRM' && !body.oauth_accounts_domain) {
       return res.status(400).json({ error: 'INVALID_CRM_CONFIGURATION' });
     }
@@ -303,8 +315,8 @@ router.put('/:dealerCode/integration', requireAdminRole, async (req, res) => {
       // Zoho and Fusion SD both authenticate via their own crm_type-specific
       // OAuth flow (see genericRestAdapter.js / fusionSdAdapter.js), not the
       // generic single-credential auth_type system every other CRM uses.
-      auth_type: (isZohoCrm || isFusionSd) ? null : isDealerStudio ? 'BEARER_TOKEN' : (body.auth_type || null), // Dealer Studio: Bearer API key
-      create_lead_endpoint: body.create_lead_endpoint || (isDealerStudio ? '/api/v1/leads' : null),
+      auth_type: (isZohoCrm || isFusionSd || isAutoPlay) ? null : isDealerStudio ? 'BEARER_TOKEN' : (body.auth_type || null), // Dealer Studio: Bearer API key; AutoPlay: OAuth client credentials
+      create_lead_endpoint: body.create_lead_endpoint || ((isDealerStudio || isAutoPlay) ? '/api/v1/leads' : null),
       update_lead_endpoint: body.update_lead_endpoint || null,
       http_method: body.http_method || 'POST',
       update_http_method: body.update_http_method || 'PUT',
@@ -339,6 +351,27 @@ router.put('/:dealerCode/integration', requireAdminRole, async (req, res) => {
       }
       if (locationId || (integration && 'dealership_location_id' in integration)) {
         fields.dealership_location_id = locationId || null;
+      }
+    }
+    // AutoPlay only: the dealer's AutoPlay account ids (dealer, yard, source and
+    // Test Drive campaign), sent with every lead. Need the autoplay_* text columns
+    // on dealer_integrations (Catalyst Console). A field is written when a value is
+    // supplied, or when its column already exists on this dealer's row (so it can be
+    // cleared): a save without one never touches a missing column.
+    if (isAutoPlay) {
+      const labels = {
+        autoplay_dealer_id: 'AutoPlay dealer ID',
+        autoplay_yard_id: 'AutoPlay yard ID',
+        autoplay_source_id: 'AutoPlay source ID',
+        autoplay_campaign_id: 'AutoPlay Test Drive campaign ID',
+      };
+      for (const [field, label] of Object.entries(labels)) {
+        const raw = body[field];
+        const value = raw === undefined || raw === null ? '' : String(raw).trim();
+        if (value && !/^\d{1,10}$/.test(value)) {
+          return res.status(400).json({ error: 'INVALID_CRM_CONFIGURATION', field, message: `${label} must be a number.` });
+        }
+        if (value || (integration && field in integration)) fields[field] = value || null;
       }
     }
     if (integration) {
@@ -377,6 +410,15 @@ router.put('/:dealerCode/integration', requireAdminRole, async (req, res) => {
       if (signingSecret) {
         await integrationAuthService.saveCredential(catalystApp, integration.ROWID, 'WEBHOOK_SIGNING_SECRET', signingSecret);
       }
+    } else if (isAutoPlay) {
+      // Blank leaves the stored value alone, like the other CRMs' keys.
+      await Promise.all(
+        [['autoplay_client_id', 'AUTOPLAY_CLIENT_ID'], ['autoplay_client_secret', 'AUTOPLAY_CLIENT_SECRET']]
+          .filter(([bodyKey]) => String(body[bodyKey] || '').trim())
+          .map(([bodyKey, credType]) =>
+            integrationAuthService.saveCredential(catalystApp, integration.ROWID, credType, String(body[bodyKey]).trim())
+          )
+      );
     } else if (body.credential && fields.auth_type) {
       const credType = integrationAuthService.AUTH_TYPE_TO_CREDENTIAL_TYPE[fields.auth_type];
       if (credType) {
@@ -395,6 +437,7 @@ router.put('/:dealerCode/integration', requireAdminRole, async (req, res) => {
     // or URL. (No-op for other CRM types.)
     fusionSdOAuthHelper.invalidateToken(integration.ROWID);
     zohoCrmOAuthHelper.invalidateToken(integration.ROWID);
+    autoPlayAdapter.invalidateToken(integration.ROWID);
     res.json({ integration: safeConfig({ ...integration, ...fields }) });
   } catch (err) {
     logger.error('dealerCrmIntegrationRoutes', `PUT integration failed for ${dealerCode}`, err);
@@ -541,7 +584,7 @@ router.put('/:dealerCode/integration/mappings', requireAdminRole, async (req, re
     // (fusionSdAdapter.nestDottedKeys); other CRM types send them as flat keys.
     const targetProblem = findTargetFieldProblem(
       validFieldMappings.map((mapping) => mapping.target_field),
-      { nested: ['FUSION_SD', 'DEALER_STUDIO'].includes(integration.crm_type) }
+      { nested: ['FUSION_SD', 'DEALER_STUDIO', 'AUTOPLAY'].includes(integration.crm_type) }
     );
     if (targetProblem) {
       return res.status(400).json({ error: 'FIELD_MAPPING_INVALID', ...targetProblem });
@@ -624,7 +667,9 @@ router.put('/:dealerCode/integration/mappings', requireAdminRole, async (req, re
         outbound_only: outboundOnly,
       });
     }
-    if (validStatusMappings.length === 0) {
+    // AutoPlay owns lead progress and sends no status back yet (return updates
+    // come later), so it may have no status rows.
+    if (validStatusMappings.length === 0 && integration.crm_type !== 'AUTOPLAY') {
       return res.status(400).json({ error: 'STATUS_MAPPING_INVALID' });
     }
     const fieldTable = catalystApp.datastore().table('integration_field_mappings');

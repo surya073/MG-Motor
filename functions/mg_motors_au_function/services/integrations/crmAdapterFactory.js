@@ -3,6 +3,7 @@
 const genericRestAdapter = require('./adapters/genericRestAdapter');
 const fusionSdAdapter = require('./adapters/fusionSdAdapter');
 const dealerStudioAdapter = require('./adapters/dealerStudioAdapter');
+const autoPlayAdapter = require('./adapters/autoPlayAdapter');
 
 /**
  * crmAdapterFactory.js
@@ -26,6 +27,7 @@ const ADAPTERS = {
   ZOHO_CRM: genericRestAdapter,
   FUSION_SD: fusionSdAdapter,
   DEALER_STUDIO: dealerStudioAdapter,
+  AUTOPLAY: autoPlayAdapter,
 };
 
 function getAdapter(crmType) {

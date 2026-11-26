@@ -19,7 +19,7 @@ const { withCrmApiLimit } = require('./crmApiConcurrencyLimiter');
 const { classifyDealerError, isRetryableClass } = require('./dealerErrorClassifier');
 const {
   getOutboundRetryConfig, isFusionInboundV2Enabled, isInboundEventStoreEnabled, isSlaDealerActionClockEnabled,
-  isKeepOutboundRetryOnInboundEnabled, isDealerStudioNewLeadsOnly, isFusionSdNewLeadsOnly,
+  isKeepOutboundRetryOnInboundEnabled, isDealerStudioNewLeadsOnly, isFusionSdNewLeadsOnly, isAutoPlayNewLeadsOnly,
   isInboundStaleEventGuardEnabled, getFusionInboundEditFields,
 } = require('../../config/env');
 const integrationAuthService = require('./integrationAuthService');
@@ -30,6 +30,7 @@ const {
   RETAIL_ORDER_OUTCOME: DEALER_STUDIO_SALE_OUTCOME, DEFAULT_OUTCOME_TARGET: DEALER_STUDIO_OUTCOME_TARGET,
 } = require('./adapters/dealerStudioInbound');
 const { applyDealerStudioPayloadRules } = require('./adapters/dealerStudioPayload');
+const { applyAutoPlayPayloadRules, campaignFor: autoPlayCampaignFor } = require('./adapters/autoPlayPayload');
 const { cachedForRun } = require('./mappingRunCache');
 const sentPayloadSnapshot = require('./sentPayloadSnapshot');
 const dealerStatusService = require('./dealerStatusService');
@@ -615,6 +616,7 @@ function buildOutboundPayload(leadRow, fieldMappings, statusMappings, { crmType,
 
   if (crmType === 'FUSION_SD') applyFusionPayloadRules(payload, fieldMappings, operation);
   if (crmType === 'DEALER_STUDIO') return applyDealerStudioPayloadRules(payload, normalizedLead, fieldMappings);
+  if (crmType === 'AUTOPLAY') return applyAutoPlayPayloadRules(payload, normalizedLead, fieldMappings);
   return payload;
 }
 
@@ -635,8 +637,14 @@ function validateIntegrationConfiguration(integration, fieldMappings, statusMapp
   if (!integration?.create_lead_endpoint) missingConfig.push('create_lead_endpoint');
   // Fusion SD and Dealer Studio derive their update path from the create
   // endpoint (the adapters' updatePath), so they never use this field.
-  if (!integration?.update_lead_endpoint && !['FUSION_SD', 'DEALER_STUDIO'].includes(integration?.crm_type)) {
+  if (!integration?.update_lead_endpoint && !['FUSION_SD', 'DEALER_STUDIO', 'AUTOPLAY'].includes(integration?.crm_type)) {
     missingConfig.push('update_lead_endpoint');
+  }
+  // AutoPlay: the dealer's AutoPlay dealer and Test Drive campaign ids are sent
+  // with every lead (autoPlayAdapter.dealerIds).
+  if (integration?.crm_type === 'AUTOPLAY') {
+    if (!/^\d+$/.test(String(integration.autoplay_dealer_id ?? '').trim())) missingConfig.push('autoplay_dealer_id');
+    if (!/^\d+$/.test(String(integration.autoplay_campaign_id ?? '').trim())) missingConfig.push('autoplay_campaign_id');
   }
 
   const configuredSources = new Set(
@@ -786,17 +794,17 @@ function dealerConnectedAt(integration) {
 }
 
 /**
- * Dealer Studio (DEALER_STUDIO_NEW_LEADS_ONLY) and Fusion SD (FUSION_SD_NEW_LEADS_ONLY), both on by default: true for a lead
+ * Dealer Studio (DEALER_STUDIO_NEW_LEADS_ONLY), Fusion SD (FUSION_SD_NEW_LEADS_ONLY) and AutoPlay
+ * (AUTOPLAY_NEW_LEADS_ONLY), all on by default: true for a lead
  * created before this dealer was connected, so a dealer's earlier leads are never
  * pushed, whichever day it is connected. A lead or dealer with no readable date is
  * not blocked.
  */
 function isBeforeDealerStudioCutoff(integration, leadRow, enabled) {
   const type = integration?.crm_type;
-  if (type !== 'DEALER_STUDIO' && type !== 'FUSION_SD') return false;
-  const on = enabled === undefined
-    ? (type === 'DEALER_STUDIO' ? isDealerStudioNewLeadsOnly() : isFusionSdNewLeadsOnly())
-    : enabled;
+  const newLeadsOnly = { DEALER_STUDIO: isDealerStudioNewLeadsOnly, FUSION_SD: isFusionSdNewLeadsOnly, AUTOPLAY: isAutoPlayNewLeadsOnly }[type];
+  if (!newLeadsOnly) return false;
+  const on = enabled === undefined ? newLeadsOnly() : enabled;
   if (!on) return false;
   const connectedAt = dealerConnectedAt(integration);
   const created = leadCreatedAt(leadRow);
@@ -835,11 +843,14 @@ function dealerPushFloor(integration) {
  * Why a lead that is not yet in the dealer CRM must not be created there now, or
  * null. DEALER_PUSH_PAUSED: the dealer's switch is off. Before-cutoff reasons: it
  * was created before the dealer connected, or before the last resume that skipped
- * the queue.
+ * the queue. AUTOPLAY_NO_CAMPAIGN: AutoPlay has no campaign for its enquiry type.
  */
 function newLeadSkipReason(integration, leadRow) {
   if (isDealerPushPaused(integration)) return 'DEALER_PUSH_PAUSED';
   if (isBeforeDealerStudioCutoff(integration, leadRow)) return 'DEALER_STUDIO_BEFORE_CUTOFF';
+  // AutoPlay takes leads only for the campaigns it has given us (Book a Test
+  // Drive so far; MG, 26 Nov 2026). Any other enquiry type is not created there.
+  if (integration?.crm_type === 'AUTOPLAY' && !autoPlayCampaignFor(leadRow)) return 'AUTOPLAY_NO_CAMPAIGN';
   const from = dealerPushFrom(integration);
   const created = leadCreatedAt(leadRow);
   if (from && created && created < from) return 'BEFORE_PUSH_RESUME';
@@ -1437,7 +1448,7 @@ async function attemptExternalCrmSync(catalystApp, integration, leadRow, zohoLea
         acknowledgementError.code = 'DEALER_ACK_MISSING_ID';
         // Dealer Studio's create response is not documented yet (its adapter reads
         // the id provisionally), so an unreadable answer is held, not re-created.
-        if (integration.crm_type === 'FUSION_SD' || integration.crm_type === 'DEALER_STUDIO') {
+        if (['FUSION_SD', 'DEALER_STUDIO', 'AUTOPLAY'].includes(integration.crm_type)) {
           return recordUnresolvedAcknowledgement(catalystApp, integration, leadRow, existingMapping, {
             payload, result, acknowledgementError, requestReference, attemptStartedAt,
           });

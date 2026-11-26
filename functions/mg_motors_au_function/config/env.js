@@ -559,6 +559,15 @@ function isFusionSdNewLeadsOnly() {
 }
 
 /**
+ * AUTOPLAY_NEW_LEADS_ONLY (default on): same rule as Dealer Studio and Fusion SD
+ * for AutoPlay dealers: only leads created at MG after the dealer was connected
+ * are created in AutoPlay. false | off | no | 0 pushes all.
+ */
+function isAutoPlayNewLeadsOnly() {
+  return !['false', 'off', 'no', '0'].includes(String(process.env.AUTOPLAY_NEW_LEADS_ONLY || '').trim().toLowerCase());
+}
+
+/**
  * PROJECT_TIMEZONE: the IANA timezone the Catalyst project (Console > Settings >
  * General) displays its system columns in (CREATEDTIME / MODIFIEDTIME). The code
  * reads those as wall-clock strings, so it must know the zone. Defaults to
@@ -581,6 +590,7 @@ module.exports = {
   getProjectTimezone,
   isDealerStudioNewLeadsOnly,
   isFusionSdNewLeadsOnly,
+  isAutoPlayNewLeadsOnly,
   getZohoConfig,
   getPublicFunctionBaseUrl,
   getOemWatchLifetimeConfig,

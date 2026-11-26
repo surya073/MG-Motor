@@ -5,6 +5,7 @@
 const CONNECTED_CRM_LABELS = Object.freeze({
   FUSION_SD: 'Fusion SD',
   DEALER_STUDIO: 'Dealer Studio',
+  AUTOPLAY: 'AutoPlay',
   ZOHO_CRM: 'Zoho CRM',
 });
 
