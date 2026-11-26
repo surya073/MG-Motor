@@ -38,7 +38,7 @@ import Skeleton from "../../ui/Skeleton/Skeleton";
 import Pagination from "../../ui/Pagination/Pagination";
 import { useAlerts } from "../../ui/Alerts/Alerts";
 import CloseButton from "../../ui/CloseButton/CloseButton";
-import Modal from "../../ui/Modal/Modal";
+import Modal, { ModalCloseButton } from "../../ui/Modal/Modal";
 import { useAuth } from "../../contexts/AuthContext";
 import { APP_ROLES } from "../../constants/auth.constants";
 import mgLogo from "../../assets/images/mg-logo-single.png";
@@ -315,13 +315,13 @@ const AUTOPLAY_DEFAULT_FIELD_MAPPINGS = [
 // Mirrored in the backend's autoPlayMappings.js INBOUND_STATUS_PRESET.
 const AUTOPLAY_DEFAULT_STATUS_MAPPINGS = [
   { source_status: "Not Contacted", target_status: "Awaiting Action", inbound_only: true },
-  { source_status: "Attempted to Contact", target_status: "Email Sent", inbound_only: true },
+  { source_status: "Contacted", target_status: "Email Sent", inbound_only: true },
   { source_status: "Contacted", target_status: "Phone Call Made", inbound_only: true },
   { source_status: "Contacted", target_status: "Meet & Qualify", inbound_only: true },
   { source_status: "Contacted", target_status: "Test Drive", inbound_only: true },
   { source_status: "Contacted", target_status: "Trade In Valuation/Appraisal", inbound_only: true },
   { source_status: "Contacted", target_status: "Present Deal", inbound_only: true },
-  { source_status: "Finance Intro", target_status: "Finance", inbound_only: true },
+  { source_status: "Contacted", target_status: "Finance", inbound_only: true },
   { source_status: "Contacted", target_status: "Sold", inbound_only: true },
   { source_status: "Contacted", target_status: "Delivered", inbound_only: true },
   { source_status: "Follow-up 1", target_status: "Follow Up/Referral", inbound_only: true },
@@ -532,6 +532,223 @@ function formatQueuedDate(value) {
     : parsed.toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short", timeZone: "Australia/Sydney" });
 }
 
+/* ---------- Connection summary (read-only view) ---------- */
+
+function NotSet() {
+  return <span className="dcc-sum__notset">Not set</span>;
+}
+
+function CopyValue({ text }) {
+  const [copied, setCopied] = useState(false);
+  if (!text) return <NotSet />;
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(String(text));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked: the value is still selectable */
+    }
+  };
+  return (
+    <span className="dcc-sum__code-wrap">
+      <code className="dcc-sum__code">{text}</code>
+      <button type="button" className="dcc-sum__copy" onClick={copy} title={copied ? "Copied" : "Copy"} aria-label="Copy value">
+        {copied ? <CheckCircle2 size={13} /> : <Copy size={13} />}
+      </button>
+    </span>
+  );
+}
+
+function Encrypted({ saved }) {
+  return saved ? (
+    <span className="dcc-sum__chip dcc-sum__chip--ok">
+      <Lock size={12} /> Encrypted
+    </span>
+  ) : (
+    <span className="dcc-sum__chip dcc-sum__chip--warn">
+      <AlertTriangle size={12} /> Not saved
+    </span>
+  );
+}
+
+function Endpoint({ method, path }) {
+  if (!path) return <NotSet />;
+  const verb = String(method || "POST").toUpperCase();
+  return (
+    <span className="dcc-sum__code-wrap">
+      <span className={`dcc-sum__method dcc-sum__method--${verb.toLowerCase()}`}>{verb}</span>
+      <code className="dcc-sum__code">{path}</code>
+    </span>
+  );
+}
+
+function SumRow({ label, children, stack = false }) {
+  return (
+    <div className={`dcc-sum__row${stack ? " dcc-sum__row--stack" : ""}`}>
+      <dt>{label}</dt>
+      <dd>{children}</dd>
+    </div>
+  );
+}
+
+function SumSection({ icon: Icon, title, children }) {
+  return (
+    <section className="dcc-sum__card">
+      <header className="dcc-sum__card-head">
+        <span className="dcc-sum__card-icon">
+          <Icon size={15} />
+        </span>
+        <h5>{title}</h5>
+      </header>
+      <dl className="dcc-sum__rows">{children}</dl>
+    </section>
+  );
+}
+
+const CRM_LABELS_FULL = {
+  GENERIC_REST: "Generic REST API",
+  ZOHO_CRM: "Zoho CRM (dealer's own account)",
+  FUSION_SD: "Fusion SD",
+  DEALER_STUDIO: "Dealer Studio",
+  AUTOPLAY: "AutoPlay",
+};
+
+const OWN_AUTH_TYPES = ["ZOHO_CRM", "FUSION_SD", "DEALER_STUDIO", "AUTOPLAY"];
+
+/**
+ * Read-only view of a saved, connected integration (Connection tab). The Edit
+ * button switches to the editable form. Secrets are never shown: only whether
+ * one is saved.
+ */
+function ConnectionSummary({ config, hasStoredCredential, hasWebhookSigningSecret, canEdit, onEdit }) {
+  const type = config.crm_type;
+  const authLabel = AUTH_TYPES.find((a) => a.value === config.auth_type)?.label;
+  const text = (value) => (value === undefined || value === null || value === "" ? <NotSet /> : value);
+  return (
+    <div className="dcc-sum">
+      <div className="dcc-sum__hero">
+        <span className="dcc-sum__hero-icon">
+          <CheckCircle2 size={20} />
+        </span>
+        <div className="dcc-sum__hero-text">
+          <h4>{CRM_LABELS_FULL[type] || type} connection</h4>
+          <p>
+            <span className="dcc-sum__dot" /> Saved and connected
+            {config.last_tested_at && <span className="dcc-sum__muted"> · last tested {config.last_tested_at}</span>}
+          </p>
+        </div>
+        {canEdit && (
+          <button type="button" className="dcc-sum__edit" onClick={onEdit} title="Edit the connection" aria-label="Edit the connection">
+            <Pencil size={14} />
+            Edit
+          </button>
+        )}
+      </div>
+
+      <div className="dcc-sum__grid">
+        <SumSection icon={Plug} title="CRM details">
+          <SumRow label="CRM">{CRM_LABELS_FULL[type] || type}</SumRow>
+          <SumRow label="CRM name">{text(config.crm_name)}</SumRow>
+          <SumRow label="Base URL" stack>
+            <CopyValue text={config.base_url} />
+          </SumRow>
+          {type === "ZOHO_CRM" && (
+            <SumRow label="Accounts domain" stack>
+              <CopyValue text={config.oauth_accounts_domain} />
+            </SumRow>
+          )}
+          {!OWN_AUTH_TYPES.includes(type) && <SumRow label="Authentication">{text(authLabel)}</SumRow>}
+        </SumSection>
+
+        <SumSection icon={Lock} title="Credentials">
+          {type === "ZOHO_CRM" && (
+            <SumRow label="Client ID, secret, refresh token">
+              <Encrypted saved={hasStoredCredential} />
+            </SumRow>
+          )}
+          {type === "FUSION_SD" && (
+            <>
+              <SumRow label="Access key / Secret key">
+                <Encrypted saved={hasStoredCredential} />
+              </SumRow>
+              <SumRow label="Webhook signing secret">
+                <Encrypted saved={hasWebhookSigningSecret} />
+              </SumRow>
+            </>
+          )}
+          {type === "DEALER_STUDIO" && (
+            <>
+              <SumRow label="API key">
+                <Encrypted saved={hasStoredCredential} />
+              </SumRow>
+              <SumRow label="Webhook signing secret">
+                <Encrypted saved={hasWebhookSigningSecret} />
+              </SumRow>
+            </>
+          )}
+          {type === "AUTOPLAY" && (
+            <SumRow label="Client ID / Client Secret">
+              <Encrypted saved={hasStoredCredential} />
+            </SumRow>
+          )}
+          {!OWN_AUTH_TYPES.includes(type) && (
+            <SumRow label={authLabel || "Credential"}>
+              <Encrypted saved={hasStoredCredential} />
+            </SumRow>
+          )}
+        </SumSection>
+
+        {type === "DEALER_STUDIO" && (
+          <SumSection icon={Store} title="Dealer Studio account">
+            <SumRow label="Dealership slug">
+              <CopyValue text={config.dealership_slug} />
+            </SumRow>
+            <SumRow label="Location ID">
+              <CopyValue text={config.dealership_location_id} />
+            </SumRow>
+          </SumSection>
+        )}
+
+        {type === "AUTOPLAY" && (
+          <SumSection icon={Store} title="AutoPlay account">
+            <SumRow label="Dealer ID">
+              <CopyValue text={config.autoplay_dealer_id} />
+            </SumRow>
+            <SumRow label="Yard ID">
+              <CopyValue text={config.autoplay_yard_id} />
+            </SumRow>
+            <SumRow label="Source ID">
+              <CopyValue text={config.autoplay_source_id} />
+            </SumRow>
+            <SumRow label="Test Drive campaign ID">
+              <CopyValue text={config.autoplay_campaign_id} />
+            </SumRow>
+          </SumSection>
+        )}
+
+        <SumSection icon={ArrowLeftRight} title="Lead endpoints">
+          <SumRow label="Create lead" stack>
+            <Endpoint method={config.http_method} path={config.create_lead_endpoint} />
+          </SumRow>
+          <SumRow label="Update lead" stack>
+            <Endpoint method={config.update_http_method} path={config.update_lead_endpoint} />
+          </SumRow>
+          <SumRow label="Updates from dealer CRM">
+            {config.webhook_enabled ? (
+              <span className="dcc-sum__chip dcc-sum__chip--ok">
+                <span className="dcc-sum__dot" /> On
+              </span>
+            ) : (
+              <span className="dcc-sum__chip">Off</span>
+            )}
+          </SumRow>
+        </SumSection>
+      </div>
+    </div>
+  );
+}
+
 function isDealerConnected(dealer) {
   const rawStatus = dealer.integration_status || dealer.crm_status || dealer.status;
   return CONNECTED_STATUSES.includes(rawStatus);
@@ -684,6 +901,9 @@ export default function DealerCRMConfig() {
   const [credentialValue, setCredentialValue] = useState("");
   const [hasStoredCredential, setHasStoredCredential] = useState(false);
   const [editingCredentials, setEditingCredentials] = useState(false);
+  // A saved, connected integration opens as a read-only summary; the pencil
+  // switches the Connection tab to the editable form.
+  const [editingConnection, setEditingConnection] = useState(false);
 
   const [fieldMappings, setFieldMappings] = useState(DEFAULT_FIELD_MAPPINGS);
   const [statusMappings, setStatusMappings] = useState(DEFAULT_STATUS_MAPPINGS);
@@ -937,6 +1157,7 @@ export default function DealerCRMConfig() {
       setHasStoredCredential(Boolean(result?.hasCredential));
       setHasWebhookSigningSecret(Boolean(result?.hasWebhookSigningSecret));
       resetCredentialInputs();
+      setEditingConnection(false);
 
       const mappingsResult = await dealerCrmIntegrationService.getMappings(dealer.dealer_code);
       setFieldMappings(
@@ -1196,6 +1417,14 @@ export default function DealerCRMConfig() {
     }
   };
 
+  // Leave edit mode without saving: back to the saved settings and the summary.
+  const cancelConnectionEdit = () => {
+    setConfig(savedConfigSnapshotRef.current);
+    resetCredentialInputs();
+    setTestResult(null);
+    setEditingConnection(false);
+  };
+
   const handleSaveConnection = async () => {
     if (!selectedDealer) return;
     setSaving(true);
@@ -1221,6 +1450,7 @@ export default function DealerCRMConfig() {
       setSaveSuccess(true);
       clearSaveSuccessSoon();
       resetCredentialInputs();
+      setEditingConnection(false);
       await loadIntegration(selectedDealer);
       setSaveSuccess(true);
       clearSaveSuccessSoon();
@@ -1445,6 +1675,13 @@ export default function DealerCRMConfig() {
   const isFusionSd = config.crm_type === "FUSION_SD";
   const isDealerStudio = config.crm_type === "DEALER_STUDIO";
   const isAutoPlay = config.crm_type === "AUTOPLAY";
+  // Saved + connected + nothing changed: show the read-only summary.
+  const showConnectionSummary =
+    config.integration_type === "EXTERNAL_CRM" &&
+    CONNECTED_STATUSES.includes(config.status) &&
+    Boolean(config.ROWID) &&
+    !editingConnection &&
+    !isConnectionDirty;
   const isConnectionVerified = isExternalCrm && CONNECTED_STATUSES.includes(config.status);
   const mappingsLocked = isExternalCrm && !isConnectionVerified;
   const isTopConnected = CONNECTED_STATUSES.includes(config.status);
@@ -1647,9 +1884,7 @@ export default function DealerCRMConfig() {
             </div>
           )}
           <div className="dealer-crm-config__push-actions">
-            <button type="button" className="dealer-crm-config__button--outline" onClick={closeWebhookInfo}>
-              Close
-            </button>
+            <ModalCloseButton className="dealer-crm-config__button--outline">Close</ModalCloseButton>
           </div>
         </Modal>
       )}
@@ -1863,16 +2098,11 @@ export default function DealerCRMConfig() {
                     <h2>{selectedDealer.dealer_name}</h2>
                     <div className="dealer-crm-config__detail-sub">
                       <span className="dealer-crm-config__detail-code">{selectedDealer.dealer_code}</span>
-                      {!configLoading && isExternalCrm && (
-                        <span
-                          className={`dealer-crm-config__header-note ${
-                            isConnectionVerified ? "dealer-crm-config__header-note--done" : ""
-                          }`}
-                        >
-                          {isConnectionVerified ? <CheckCircle2 size={13} /> : <ShieldCheck size={13} />}
-                          {isConnectionVerified
-                            ? "Connected. This dealer's leads will now sync automatically."
-                            : "Fill in the CRM details below, then test the connection to activate syncing."}
+                      {/* Connected is already shown by the badge; only the next step is spelled out. */}
+                      {!configLoading && isExternalCrm && !isConnectionVerified && (
+                        <span className="dealer-crm-config__header-note">
+                          <ShieldCheck size={13} />
+                          Fill in the CRM details, then test the connection to start syncing.
                         </span>
                       )}
                     </div>
@@ -2041,8 +2271,26 @@ export default function DealerCRMConfig() {
                           This dealer uses the standard Catalyst dealer portal. No further configuration is needed —
                           existing invitation and lead sync behaviour applies unchanged.
                         </p>
+                      ) : showConnectionSummary ? (
+                        <ConnectionSummary
+                          config={config}
+                          hasStoredCredential={hasStoredCredential}
+                          hasWebhookSigningSecret={hasWebhookSigningSecret}
+                          canEdit={!isViewUser}
+                          onEdit={() => setEditingConnection(true)}
+                        />
                       ) : (
                         <>
+                          {editingConnection && (
+                            <div className="dealer-crm-config__edit-banner">
+                              <span>
+                                <Pencil size={14} /> Editing the connection. Save to apply, or cancel to keep the current settings.
+                              </span>
+                              <button type="button" className="dealer-crm-config__link-button" onClick={cancelConnectionEdit}>
+                                Cancel
+                              </button>
+                            </div>
+                          )}
                           <div className="dealer-crm-config__section-title">CRM details</div>
 
                           <div className="dealer-crm-config__field-row">

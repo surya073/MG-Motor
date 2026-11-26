@@ -2201,3 +2201,452 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* =========================================================
+   CONNECTION SUMMARY (read-only view of a saved, connected integration)
+   ========================================================= */
+
+.dcc-sum {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  animation: dcc-sum-in 220ms ease-out both;
+}
+
+@keyframes dcc-sum-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dcc-sum { animation: none; }
+}
+
+/* Hero: what is connected, and the Edit action */
+.dcc-sum__hero {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--color-success) 35%, var(--color-border));
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, var(--color-success-soft, #f0fdf4), var(--color-bg-elevated) 70%);
+}
+
+.dcc-sum__hero-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  background: var(--color-success);
+  color: #fff;
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--color-success) 30%, transparent);
+}
+
+.dcc-sum__hero-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.dcc-sum__hero-text h4 {
+  font-size: var(--fs-md, 15px);
+  font-weight: var(--fw-semibold);
+  color: var(--color-text-primary);
+  line-height: 1.3;
+}
+
+.dcc-sum__hero-text p {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+  color: var(--color-success);
+  font-weight: var(--fw-medium);
+}
+
+.dcc-sum__muted {
+  color: var(--color-text-muted);
+  font-weight: 400;
+}
+
+.dcc-sum__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 20%, transparent);
+  flex-shrink: 0;
+}
+
+.dcc-sum__edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+  box-shadow: var(--shadow-xs);
+  transition: transform var(--transition-fast) var(--ease-premium), border-color var(--transition-fast) var(--ease-premium),
+    box-shadow var(--transition-fast) var(--ease-premium);
+}
+
+.dcc-sum__edit:hover,
+.dcc-sum__edit:focus-visible {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-soft);
+  transform: translateY(-1px);
+}
+
+/* Section cards: two per row on wide screens */
+.dcc-sum__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.dcc-sum__card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-xs);
+  overflow: hidden;
+}
+
+.dcc-sum__card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 10px var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-alt);
+}
+
+.dcc-sum__card-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.dcc-sum__card-head h5 {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-secondary);
+}
+
+.dcc-sum__rows {
+  margin: 0;
+}
+
+.dcc-sum__row {
+  display: grid;
+  grid-template-columns: minmax(96px, 40%) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  padding: 10px var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  transition: background-color var(--transition-fast) var(--ease-premium);
+}
+
+.dcc-sum__row--stack {
+  grid-template-columns: 1fr;
+  gap: 5px;
+}
+
+.dcc-sum__row:last-child {
+  border-bottom: 0;
+}
+
+.dcc-sum__row:hover {
+  background: var(--color-surface-alt);
+}
+
+.dcc-sum__row dt {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  font-weight: var(--fw-medium);
+}
+
+.dcc-sum__row dd {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+/* Values */
+.dcc-sum__code-wrap {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.dcc-sum__code {
+  padding: 2px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface-alt);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.dcc-sum__copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--transition-fast), background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.dcc-sum__row:hover .dcc-sum__copy,
+.dcc-sum__copy:focus-visible {
+  opacity: 1;
+}
+
+.dcc-sum__copy:hover {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-border);
+  color: var(--color-primary);
+}
+
+@media (hover: none) {
+  .dcc-sum__copy { opacity: 1; }
+}
+
+.dcc-sum__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-alt);
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
+  color: var(--color-text-secondary);
+}
+
+.dcc-sum__chip--ok {
+  border-color: color-mix(in srgb, var(--color-success) 40%, transparent);
+  background: var(--color-success-soft, #f0fdf4);
+  color: var(--color-success);
+}
+
+.dcc-sum__chip--warn {
+  border-color: color-mix(in srgb, var(--color-warning, #d97706) 40%, transparent);
+  background: var(--color-warning-soft, #fffbeb);
+  color: var(--color-warning, #b45309);
+}
+
+.dcc-sum__notset {
+  display: inline-flex;
+  padding: 1px 8px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 400;
+  font-style: italic;
+  color: var(--color-text-muted);
+}
+
+.dcc-sum__method {
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #fff;
+  background: var(--color-text-secondary);
+}
+
+.dcc-sum__method--post { background: #16a34a; }
+.dcc-sum__method--put { background: #2563eb; }
+.dcc-sum__method--patch { background: #d97706; }
+.dcc-sum__method--delete { background: #dc2626; }
+
+@media (max-width: 640px) {
+  .dcc-sum__grid { grid-template-columns: 1fr; }
+  .dcc-sum__row { grid-template-columns: 1fr; gap: 4px; }
+  .dcc-sum__hero { flex-wrap: wrap; }
+}
+
+.dealer-crm-config__edit-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-warning, #d97706);
+  border-radius: var(--radius-md);
+  background: var(--color-warning-soft, #fffbeb);
+  font-size: var(--fs-sm);
+}
+
+.dealer-crm-config__edit-banner span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@media (max-width: 640px) {
+  .dealer-crm-config__summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================================================
+   FIT & DENSITY (26 Nov 2026)
+   The dealer box header (name, Dealer Portal / External CRM switch, status
+   row) and the step tabs took ~260px of a laptop-height panel, leaving room
+   for about three form or mapping rows. Tighter spacing gives that room back
+   to the form; the tabs stay pinned while the form scrolls.
+   ========================================================= */
+
+.dealer-crm-config__back {
+  margin-bottom: var(--space-2);
+}
+
+/* Header: name + code on the left, Dealer Portal / External CRM on the right
+   of the same row; status controls on one short row underneath. */
+@media (min-width: 1000px) {
+  .dealer-crm-config__detail-header {
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .dealer-crm-config__detail-id {
+    flex: 1 1 260px;
+  }
+  .dealer-crm-config__header-mode {
+    width: 300px;
+  }
+}
+
+.dealer-crm-config__detail-avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+}
+
+.dealer-crm-config__detail-avatar img {
+  width: 22px;
+}
+
+.dealer-crm-config__detail-status {
+  flex: 1 1 100%;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.dealer-crm-config__detail-status .dealer-crm-config__push {
+  padding-block: 4px;
+}
+
+.dealer-crm-config__info-icon,
+.dealer-crm-config__remove-icon {
+  width: 30px;
+  height: 30px;
+}
+
+/* Step tabs: shorter, still pinned while the panel scrolls. */
+.dealer-crm-config__tabs {
+  padding: var(--space-2) 0;
+}
+
+.dealer-crm-config__tabs button {
+  height: 34px;
+  font-size: var(--fs-sm);
+}
+
+.dealer-crm-config__tabs button svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* Saved mapping rows: long field names wrap instead of being cut off. */
+.dealer-crm-config__mapping-saved-text {
+  flex-wrap: wrap;
+  white-space: normal;
+  overflow: visible;
+  row-gap: 2px;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.dealer-crm-config__mapping-row--saved {
+  padding: 6px var(--space-2);
+}
+
+/* Dealer list: slimmer cards so more dealers fit without scrolling. */
+.dealer-crm-config__dealer-list-scroll {
+  gap: 6px;
+  padding: 5px;
+}
+
+.dealer-crm-config__dealer-row {
+  padding: 6px var(--space-3);
+}
+
+.dealer-crm-config__dealer-name {
+  line-height: 1.3;
+}
+
+/* Connection form: a little less vertical air between fields. */
+.dealer-crm-config__form {
+  gap: var(--space-3);
+}
+
+
+/* Phones: the header stacks vertically, so it must not wrap into a second
+   (off-screen) column, and the status row takes its natural height. The two
+   connection types stay side by side. */
+@media (max-width: 640px) {
+  .dealer-crm-config__detail-header {
+    flex-wrap: nowrap;
+    align-items: stretch;
+  }
+  .dealer-crm-config__detail-id {
+    flex: 0 0 auto;
+  }
+  .dealer-crm-config__detail-status {
+    flex: 0 0 auto;
+  }
+  .dealer-crm-config__header-mode .dealer-crm-config__mode-toggle {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
