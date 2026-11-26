@@ -22,15 +22,26 @@ const logger = require('../../utils/logger');
 
 const MESSAGE = 'FI DIGITAL TEST LEAD ONLY - please ignore and delete. Sent by FI Digital to check the MG Lead Exchange connection.';
 
-function testLeadFor(dealerCode, reference) {
+// Each test lead gets its own email and mobile (from its reference), so a CRM that
+// joins a new lead onto the same customer's open lead (AutoPlay does) still
+// creates a new one. The name can be set per send ("FI Digital" + lastName).
+function cleanName(value, fallback) {
+  const text = String(value ?? '').replace(/[^A-Za-z0-9 .'-]/g, '').trim().slice(0, 40);
+  return text || fallback;
+}
+
+function testLeadFor(dealerCode, reference, { firstName, lastName } = {}) {
+  const first = cleanName(firstName, 'FI Digital');
+  const last = cleanName(lastName, 'Test Lead');
+  const digits = reference.replace(/\D/g, '').slice(-8).padStart(8, '0');
   return {
     crm_record_id: reference,
     enquiry_id: reference,
-    customer_name: 'FI Digital Test Lead',
-    first_name: 'FI Digital',
-    last_name: 'Test Lead',
-    email_address: 'fidigital.testlead@example.com',
-    mobile_number: '0400000000',
+    customer_name: `${first} ${last}`,
+    first_name: first,
+    last_name: last,
+    email_address: `fidigital.testlead+${digits}@example.com`,
+    mobile_number: `04${digits}`,
     postcode: '3000',
     vehicle_model: 'MG ZS',
     enquiry_model: 'MG ZS',
@@ -62,7 +73,7 @@ async function writeTestLog(catalystApp, integration, fields) {
 /**
  * @returns {Promise<{dealerCode, ok, reference, externalLeadId?, httpStatus?, error?}>}
  */
-async function sendTestLead(catalystApp, dealerCode) {
+async function sendTestLead(catalystApp, dealerCode, names = {}) {
   const integration = await crmIntegrationService.getIntegrationByDealerCode(catalystApp, dealerCode);
   if (!integration || integration.integration_type !== 'EXTERNAL_CRM') {
     return { dealerCode, ok: false, error: 'INTEGRATION_NOT_CONFIGURED' };
@@ -77,7 +88,7 @@ async function sendTestLead(catalystApp, dealerCode) {
   }
 
   try {
-    const payload = crmIntegrationService.buildOutboundPayload(testLeadFor(dealerCode, reference), fieldMappings, statusMappings, {
+    const payload = crmIntegrationService.buildOutboundPayload(testLeadFor(dealerCode, reference, names), fieldMappings, statusMappings, {
       crmType: integration.crm_type,
       operation: 'CREATE_LEAD',
     });

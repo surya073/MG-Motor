@@ -85,7 +85,8 @@ test('the default AutoPlay map covers every mandatory MG field', () => {
 const AUTOPLAY_STAGES = ['Awaiting Action', 'Email Sent', 'Phone Call Made', 'Meet & Qualify', 'Test Drive',
   'Trade In Valuation/Appraisal', 'Present Deal', 'Finance', 'Sold', 'Delivered', 'Follow Up/Referral',
   'Closed - Won', 'Closed - Lost'];
-const MG_LEAD_STATUSES = ['Not Contacted', 'Attempted to Contact', 'Contacted', 'Finance Intro', 'Follow-up 1', 'Lost Lead'];
+// MG statuses in use (Attempted to Contact and Finance Intro are not, MG 26 Nov 2026).
+const MG_LEAD_STATUSES = ['Not Contacted', 'Contacted', 'Follow-up 1', 'Lost Lead'];
 
 test('the default status map covers every AutoPlay stage once, onto real, dealer-settable MG statuses', () => {
   assert.deepEqual(INBOUND_STATUS_PRESET.map((row) => row.dealer_status), AUTOPLAY_STAGES);

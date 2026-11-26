@@ -248,7 +248,8 @@ router.post('/cron/backfill-test-drive-contacted', async (req, res) => {
 // Sends ONE FI Digital test lead per dealer through its real CRM connection
 // (adapter, mapping, credentials) to prove the connection end to end. Writes
 // nothing to leads, lead_integrations or MG's CRM; one TEST_LEAD log row per
-// dealer. Body: { dealerCodes: ['279501', ...] } (at most 10).
+// dealer. Body: { dealerCodes: ['279501', ...] (at most 10), firstName?, lastName? }
+// (name defaults to "FI Digital Test Lead"; email and mobile are unique per lead).
 router.post('/cron/send-test-lead', async (req, res) => {
   const providedSecret = req.headers['x-cron-secret'];
   if (!providedSecret || providedSecret !== process.env.CRON_SECRET) {
@@ -263,7 +264,8 @@ router.post('/cron/send-test-lead', async (req, res) => {
   try {
     const catalystApp = usageContext.initialize(catalyst, req);
     const results = [];
-    for (const code of codes) results.push(await sendTestLead(catalystApp, code));
+    const names = { firstName: req.body?.firstName, lastName: req.body?.lastName };
+    for (const code of codes) results.push(await sendTestLead(catalystApp, code, names));
     res.status(200).json({ success: true, results });
   } catch (err) {
     logger.error('cronRoutes', 'Test lead send failed', err);

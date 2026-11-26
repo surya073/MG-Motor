@@ -41,18 +41,20 @@ const FIELD_PRESET = FIELD_PRESET_ROWS.map(([source_field, target_field, data_ty
 // The 13 stages read live for AutoPlay dealer 2220 (GET /api/v1/lookups/
 // contact-item-progress, 26 Nov 2026), mapped as in
 // data/autoplayDocs/MG_X_AutoPlay_Field_Status_Mapping.xlsx, sheet 3 (FI Digital
-// proposal, awaiting MG confirmation). The Enquiry Outcome part of that sheet (Test
+// proposal, awaiting MG confirmation; Attempted to Contact and Finance Intro are not
+// MG statuses in use, so Email Sent and Finance map to Contacted, 26 Nov 2026). The
+// Enquiry Outcome part of that sheet (Test
 // Drive, Sold/Delivered/Closed - Won -> Retail Order, Closed - Lost -> Lost) is
 // applied by the AutoPlay return-update translator, not by these rows.
 const INBOUND_STATUS_PRESET = Object.freeze([
   { dealer_status: 'Awaiting Action', mg_status: 'Not Contacted' },
-  { dealer_status: 'Email Sent', mg_status: 'Attempted to Contact' },
+  { dealer_status: 'Email Sent', mg_status: 'Contacted' },
   { dealer_status: 'Phone Call Made', mg_status: 'Contacted' },
   { dealer_status: 'Meet & Qualify', mg_status: 'Contacted' },
   { dealer_status: 'Test Drive', mg_status: 'Contacted' },
   { dealer_status: 'Trade In Valuation/Appraisal', mg_status: 'Contacted' },
   { dealer_status: 'Present Deal', mg_status: 'Contacted' },
-  { dealer_status: 'Finance', mg_status: 'Finance Intro' },
+  { dealer_status: 'Finance', mg_status: 'Contacted' },
   { dealer_status: 'Sold', mg_status: 'Contacted' },
   { dealer_status: 'Delivered', mg_status: 'Contacted' },
   { dealer_status: 'Follow Up/Referral', mg_status: 'Follow-up 1' },

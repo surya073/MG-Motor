@@ -69,3 +69,24 @@ test('a dealer with no field mappings is refused without calling the CRM', async
   assert.equal(result.error, 'NO_FIELD_MAPPINGS');
   assert.equal(create.mock.calls.length, 0);
 });
+
+test('each test lead has its own email and mobile, and the name can be set', async (t) => {
+  const harness = dealerStudioHarness(t);
+  const sent = [];
+  const adapter = crmAdapterFactory.getAdapter('DEALER_STUDIO');
+  t.mock.method(adapter, 'createLead', async (_app, _integration, payload) => {
+    sent.push(payload);
+    return { externalLeadId: String(sent.length), httpStatus: 201 };
+  });
+  await sendTestLead(harness.db.app, 'AU999', { lastName: 'Test Lead 3' });
+  await new Promise((r) => setTimeout(r, 5));
+  await sendTestLead(harness.db.app, 'AU999');
+  assert.equal(sent[0].first_name, 'FI Digital');
+  assert.equal(sent[0].last_name, 'Test Lead 3');
+  assert.equal(sent[1].last_name, 'Test Lead');
+  assert.notEqual(sent[0].email, sent[1].email);
+  assert.notEqual(sent[0].mobile, sent[1].mobile);
+  assert.match(sent[0].email, /^fidigital\.testlead\+\d{8}@example\.com$/);
+  assert.match(sent[0].mobile, /^04\d{8}$/);
+});
+
