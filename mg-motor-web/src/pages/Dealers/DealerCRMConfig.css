@@ -2063,6 +2063,100 @@
 }
 
 /* Delete-connection icon (top right of the dealer box) */
+.dealer-crm-config__info-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-full);
+  color: var(--color-text-secondary, inherit);
+  cursor: pointer;
+  transition: background-color var(--transition-fast) var(--ease-premium), border-color var(--transition-fast) var(--ease-premium);
+}
+
+.dealer-crm-config__info-icon:hover,
+.dealer-crm-config__info-icon:focus-visible {
+  background-color: var(--color-bg-subtle, rgba(0, 0, 0, 0.04));
+  border-color: var(--color-primary, currentColor);
+}
+
+.dealer-crm-config__info-grid {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: var(--space-3, 12px) var(--space-4, 16px);
+  align-items: start;
+  margin-bottom: var(--space-4, 16px);
+}
+
+.dealer-crm-config__info-label {
+  font-weight: 600;
+  color: var(--color-text-secondary, inherit);
+}
+
+.dealer-crm-config__info-value {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dealer-crm-config__info-copy {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dealer-crm-config__info-copy code {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  font-size: 12px;
+}
+
+.dealer-crm-config__info-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm, 6px);
+  cursor: pointer;
+}
+
+.dealer-crm-config__info-muted {
+  font-size: 12px;
+  color: var(--color-text-tertiary, #6b7280);
+}
+
+.dealer-crm-config__info-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--color-warning, #b45309);
+}
+
+.dealer-crm-config__info-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-secondary, inherit);
+}
+
+@media (max-width: 600px) {
+  .dealer-crm-config__info-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .dealer-crm-config__remove-icon {
   display: inline-flex;
   align-items: center;

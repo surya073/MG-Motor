@@ -20,6 +20,10 @@ import {
   Globe,
   Pencil,
   Trash2,
+  Info,
+  Copy,
+  Eye,
+  EyeOff,
   Store,
   Search as SearchIcon,
   X as ClearIcon,
@@ -710,6 +714,11 @@ export default function DealerCRMConfig() {
   const [autoplayClientId, setAutoplayClientId] = useState("");
   const [autoplayClientSecret, setAutoplayClientSecret] = useState("");
   const [hasWebhookSigningSecret, setHasWebhookSigningSecret] = useState(false);
+  // Connection details popup (info icon): loaded on open, secret hidden until shown.
+  const [webhookInfo, setWebhookInfo] = useState(null);
+  const [webhookInfoOpen, setWebhookInfoOpen] = useState(false);
+  const [webhookInfoLoading, setWebhookInfoLoading] = useState(false);
+  const [showWebhookSecret, setShowWebhookSecret] = useState(false);
 
    const savedConfigSnapshotRef = useRef(EMPTY_CONFIG);
 
@@ -1156,6 +1165,37 @@ export default function DealerCRMConfig() {
     }
   };
 
+  const openWebhookInfo = async () => {
+    if (!selectedDealer) return;
+    setWebhookInfo(null);
+    setShowWebhookSecret(false);
+    setWebhookInfoOpen(true);
+    setWebhookInfoLoading(true);
+    try {
+      setWebhookInfo(await dealerCrmIntegrationService.getWebhookInfo(selectedDealer.dealer_code));
+    } catch (err) {
+      setWebhookInfoOpen(false);
+      showAlert("error", err?.response?.data?.error || "Couldn't load the connection details.", { title: "Connection details" });
+    } finally {
+      setWebhookInfoLoading(false);
+    }
+  };
+
+  const closeWebhookInfo = () => {
+    setWebhookInfoOpen(false);
+    setWebhookInfo(null);
+    setShowWebhookSecret(false);
+  };
+
+  const copyText = async (text, label) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showAlert("success", `${label} copied.`, { title: "Copied" });
+    } catch {
+      showAlert("error", "Couldn't copy. Select the text and copy it manually.", { title: "Copy failed" });
+    }
+  };
+
   const handleSaveConnection = async () => {
     if (!selectedDealer) return;
     setSaving(true);
@@ -1520,6 +1560,99 @@ export default function DealerCRMConfig() {
           </div>
         </Modal>
       )}
+      {webhookInfoOpen && selectedDealer && (
+        <Modal title="Connection details" onClose={closeWebhookInfo} width={600}>
+          {webhookInfoLoading || !webhookInfo ? (
+            <p className="dealer-crm-config__push-intro">
+              <Loader2 size={14} className="spin" /> Loading...
+            </p>
+          ) : (
+            <div className="dealer-crm-config__info-grid">
+              <div className="dealer-crm-config__info-label">Dealer</div>
+              <div className="dealer-crm-config__info-value">
+                <strong>{webhookInfo.dealerName || selectedDealer.dealer_name}</strong> ({webhookInfo.dealerCode})
+              </div>
+
+              <div className="dealer-crm-config__info-label">CRM</div>
+              <div className="dealer-crm-config__info-value">
+                {webhookInfo.crmLabel}
+                {webhookInfo.status && <span className="dealer-crm-config__info-muted"> · {webhookInfo.status}</span>}
+              </div>
+
+              <div className="dealer-crm-config__info-label">Webhook URL</div>
+              <div className="dealer-crm-config__info-value">
+                {webhookInfo.webhookUrl ? (
+                  <div className="dealer-crm-config__info-copy">
+                    <code>{webhookInfo.webhookUrl}</code>
+                    <button
+                      type="button"
+                      className="dealer-crm-config__info-button"
+                      onClick={() => copyText(webhookInfo.webhookUrl, "Webhook URL")}
+                      title="Copy webhook URL"
+                      aria-label="Copy webhook URL"
+                    >
+                      <Copy size={14} />
+                    </button>
+                  </div>
+                ) : (
+                  <span className="dealer-crm-config__info-muted">Not available: PUBLIC_FUNCTION_BASE_URL is not set.</span>
+                )}
+                <span className="dealer-crm-config__info-muted">Method: {webhookInfo.method}</span>
+              </div>
+
+              <div className="dealer-crm-config__info-label">Auth header</div>
+              <div className="dealer-crm-config__info-value">
+                <code>{webhookInfo.header}</code>
+              </div>
+
+              <div className="dealer-crm-config__info-label">Webhook secret</div>
+              <div className="dealer-crm-config__info-value">
+                {webhookInfo.secret ? (
+                  <div className="dealer-crm-config__info-copy">
+                    <code>{showWebhookSecret ? webhookInfo.secret : "•".repeat(24)}</code>
+                    <button
+                      type="button"
+                      className="dealer-crm-config__info-button"
+                      onClick={() => setShowWebhookSecret((v) => !v)}
+                      title={showWebhookSecret ? "Hide secret" : "Show secret"}
+                      aria-label={showWebhookSecret ? "Hide secret" : "Show secret"}
+                    >
+                      {showWebhookSecret ? <EyeOff size={14} /> : <Eye size={14} />}
+                    </button>
+                    <button
+                      type="button"
+                      className="dealer-crm-config__info-button"
+                      onClick={() => copyText(webhookInfo.secret, "Webhook secret")}
+                      title="Copy webhook secret"
+                      aria-label="Copy webhook secret"
+                    >
+                      <Copy size={14} />
+                    </button>
+                  </div>
+                ) : (
+                  <span className="dealer-crm-config__info-muted">No shared secret set.</span>
+                )}
+                {webhookInfo.secretName && <span className="dealer-crm-config__info-muted">Source: {webhookInfo.secretName}</span>}
+                {webhookInfo.secret && !webhookInfo.enforced && (
+                  <span className="dealer-crm-config__info-warning">
+                    <AlertTriangle size={13} /> Not enforced for this dealer right now.
+                  </span>
+                )}
+              </div>
+
+              {webhookInfo.note && <p className="dealer-crm-config__info-note">{webhookInfo.note}</p>}
+              <p className="dealer-crm-config__info-note">
+                Share the secret with the dealer's CRM provider only through a secure channel (a one-time secret link), never by email.
+              </p>
+            </div>
+          )}
+          <div className="dealer-crm-config__push-actions">
+            <button type="button" className="dealer-crm-config__button--outline" onClick={closeWebhookInfo}>
+              Close
+            </button>
+          </div>
+        </Modal>
+      )}
       {removeDialogOpen && selectedDealer && (
         <Modal
           title={`Delete the CRM connection for ${selectedDealer.dealer_name}?`}
@@ -1824,6 +1957,17 @@ export default function DealerCRMConfig() {
                   <Badge tone={isTopConnected ? "active" : "neutral"} fixed>
                     {isTopConnected ? "Connected" : "Not Connected"}
                   </Badge>
+                  {!configLoading && config.ROWID && !isViewUser && isExternalCrm && (
+                    <button
+                      type="button"
+                      className="dealer-crm-config__info-icon"
+                      onClick={openWebhookInfo}
+                      title="Connection details: CRM, webhook URL and secret"
+                      aria-label={`Connection details for ${selectedDealer.dealer_name}`}
+                    >
+                      <Info size={16} />
+                    </button>
+                  )}
                   {/* Only a saved integration can be removed (it has a ROWID). */}
                   {!configLoading && config.ROWID && !isViewUser && (
                     <button

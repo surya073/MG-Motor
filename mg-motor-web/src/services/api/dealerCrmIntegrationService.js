@@ -94,6 +94,13 @@ export const dealerCrmIntegrationService = {
     return data;
   },
 
+  // Connection details for the info popup: dealer, CRM, webhook URL, auth header and
+  // that CRM type's shared webhook secret (admin only, never cached).
+  async getWebhookInfo(dealerCode) {
+    const { data } = await axiosInstance.get(`${BASE}/${encodeURIComponent(dealerCode)}/integration/webhook-info`);
+    return data;
+  },
+
   async generateWebhookSecret(dealerCode) {
   const { data } = await axiosInstance.post(`${BASE}/${encodeURIComponent(dealerCode)}/integration/webhook-secret`);
   return data;

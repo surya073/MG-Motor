@@ -9,6 +9,7 @@ const { findTargetFieldProblem, missingDeliveryMappingFields } = require('../ser
 const { assertSafeUrl } = require('../services/integrations/adapters/genericRestAdapter');
 const fusionSdOAuthHelper = require('../services/integrations/adapters/fusionSdOAuthHelper');
 const autoPlayAdapter = require('../services/integrations/adapters/autoPlayAdapter');
+const { describeWebhook } = require('../services/integrations/webhookInfoService');
 const zohoCrmOAuthHelper = require('../services/integrations/adapters/zohoCrmOAuthHelper');
 const { assertZohoEndpoint } = require('../services/integrations/adapters/zohoEndpointPolicy');
 const { isValidLeadId } = require('../services/integrations/adapters/fusionSdAdapter');
@@ -924,6 +925,25 @@ router.post('/:dealerCode/integration/replay', requireAdminRole, async (req, res
     if (err.code === 'LEAD_NOT_REPLAYABLE') return res.status(409).json({ error: err.code });
     logger.error('dealerCrmIntegrationRoutes', `Replay failed for ${dealerCode}`, err);
     res.status(500).json({ error: err.code || 'INTERNAL_ERROR' });
+  }
+});
+
+// Connection details for the Dealer CRM page's info popup: dealer, CRM, webhook
+// URL, auth header and that CRM type's shared webhook secret (admin only).
+router.get('/:dealerCode/integration/webhook-info', requireAdminRole, async (req, res) => {
+  const catalystApp = catalyst.initialize(req);
+  const { dealerCode } = req.params;
+  try {
+    const integration = await crmIntegrationService.getIntegrationByDealerCode(catalystApp, dealerCode);
+    if (!integration) return res.status(404).json({ error: 'INTEGRATION_NOT_CONFIGURED' });
+    const dealer = await crmIntegrationService.findDealerByCode(catalystApp, dealerCode);
+    const info = describeWebhook(integration, dealer);
+    logger.info('dealerCrmIntegrationRoutes', `Webhook connection details viewed for dealer ${dealerCode} (${integration.crm_type}) by user ${res.locals?.currentUser?.user_id || 'unknown'}`);
+    res.set('Cache-Control', 'no-store');
+    res.json(info);
+  } catch (err) {
+    logger.error('dealerCrmIntegrationRoutes', `Webhook info failed for ${dealerCode}`, err);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 });
 
