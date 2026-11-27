@@ -141,6 +141,13 @@ const SORTS = {
 const MAX_ANDS = 9;
 const MAX_CHAIN = 10;
 
+// Columns the Lead Exchange search box matches (LIKE '*term*'); the dealer NAME is
+// matched separately (dealers table). 7 columns + the dealer-name IN stays within MAX_CHAIN.
+const SEARCH_COLUMNS = Object.freeze([
+  'customer_name', 'email_address', 'mobile_number', 'vehicle_model',
+  'crm_record_id', 'enquiry_id', 'dealer_code',
+]);
+
 function cond(sql, ands = 0, chain = 1) {
   return { sql, ands, chain };
 }
@@ -320,7 +327,8 @@ function buildWhere(filters, { pathCondition, searchDealerCodes = [] } = {}) {
       groups.push(cond("ROWID = '0'"));
     } else {
       const like = quote(term);
-      const parts = ['customer_name', 'email_address', 'mobile_number', 'vehicle_model'].map((column) =>
+      // Also the MG Zoho lead id, the MG Enquiry ID (MGENQ...) and the dealer code.
+      const parts = SEARCH_COLUMNS.map((column) =>
         cond(`${column} LIKE '*${like}*'`)
       );
       if (searchDealerCodes.length) parts.push(inList('dealer_code', searchDealerCodes));

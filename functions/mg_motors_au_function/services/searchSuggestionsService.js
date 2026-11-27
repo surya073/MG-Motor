@@ -6,8 +6,9 @@
 const MAX_TOKENS = 9; // dealer scope + nine token groups stays inside ZCQL's AND budget
 const MAX_QUERY_LENGTH = 256;
 const PAGE_SIZE = 300;
-const LEAD_COLUMNS = 'ROWID, customer_name, email_address, mobile_number, vehicle_model, dealer_code, lead_status';
-const SEARCHABLE_LEAD_COLUMNS = ['customer_name', 'email_address', 'mobile_number', 'vehicle_model', 'dealer_code'];
+const LEAD_COLUMNS = 'ROWID, customer_name, email_address, mobile_number, vehicle_model, dealer_code, lead_status, crm_record_id, enquiry_id';
+// Also the MG Zoho lead id and the MG Enquiry ID (MGENQ...).
+const SEARCHABLE_LEAD_COLUMNS = ['customer_name', 'email_address', 'mobile_number', 'vehicle_model', 'dealer_code', 'crm_record_id', 'enquiry_id'];
 
 const quote = (value) => String(value ?? '').replace(/'/g, "''");
 const containsEvery = (values, tokens) => {

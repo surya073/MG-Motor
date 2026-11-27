@@ -767,7 +767,7 @@ export default function LeadExchangePage() {
                     setSearch(event.target.value);
                     resetPage();
                   }}
-                  placeholder="Search by customer, email, mobile, dealer, or vehicle…"
+                  placeholder="Search by customer, Zoho ID, MG Enquiry ID, dealer, email, mobile or vehicle…"
                 />
               </div>
               <Dropdown

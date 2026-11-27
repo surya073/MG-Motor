@@ -325,3 +325,11 @@ test('each lead carries its dealer CRM label (Fusion SD, Dealer Studio, ...) for
     ['Fusion MG', 'Fusion SD'], ['Studio MG', 'Dealer Studio'], ['No CRM MG', null],
   ]);
 });
+
+test('Lead Exchange search also matches the MG Zoho lead id, MG Enquiry ID and dealer code', () => {
+  const where = buildWhere({ search: 'MGENQ84509' });
+  ['customer_name', 'email_address', 'mobile_number', 'vehicle_model', 'crm_record_id', 'enquiry_id', 'dealer_code']
+    .forEach((column) => assert.ok(where.includes(`${column} LIKE '*MGENQ84509*'`), column));
+  // With a dealer-name match too, the OR chain stays inside ZCQL's limit.
+  assert.ok(buildWhere({ search: 'Werribee' }, { searchDealerCodes: ['302901', '302301'] }).includes("dealer_code IN ('302901', '302301')"));
+});

@@ -182,7 +182,10 @@ export function runSearch(rawQuery, { role, leads = [], dealers = [], scenarios 
   const leadHits = leads
     .filter((l) =>
       matches(
-        [l.customer_name, l.email_address, l.mobile_number, l.vehicle_model, l.dealer_name, l.dealer_code].join(" "),
+        [
+          l.customer_name, l.email_address, l.mobile_number, l.vehicle_model, l.dealer_name, l.dealer_code,
+          l.crm_record_id, l.enquiry_id, // MG Zoho lead id and MG Enquiry ID (MGENQ...)
+        ].join(" "),
         query
       )
     )
@@ -191,7 +194,7 @@ export function runSearch(rawQuery, { role, leads = [], dealers = [], scenarios 
       id: `lead-${l.ROWID}`,
       group: "Leads",
       label: l.customer_name || "Unnamed lead",
-      hint: [l.vehicle_model, l.dealer_name || l.dealer_code, l.lead_status].filter(Boolean).join(" · "),
+      hint: [l.enquiry_id, l.vehicle_model, l.dealer_name || l.dealer_code, l.lead_status].filter(Boolean).join(" · "),
       // Admin side has a per-lead detail route; dealers get their list pre-filtered.
       to: admin
         ? `${ROUTES.LEAD_EXCHANGE}/${l.ROWID}`
@@ -224,7 +227,7 @@ export function runSearch(rawQuery, { role, leads = [], dealers = [], scenarios 
         id: "find-leads",
         group: "Search for “" + query + "” in",
         label: "Lead Exchange",
-        hint: "Customers, emails, mobiles, vehicles, dealers",
+        hint: "Customers, Zoho IDs, MG Enquiry IDs, emails, mobiles, vehicles, dealers",
         to: `${ROUTES.LEAD_EXCHANGE}?search=${q}`,
         icon: "leads",
       },

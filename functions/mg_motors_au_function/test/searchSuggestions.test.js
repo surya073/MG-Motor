@@ -112,3 +112,21 @@ test('admin HTTP suggestions retain explicit role authorization', () => {
     if (!passed) assert.equal(res.statusCode, 403);
   }
 });
+
+test('admin and dealer suggestions find a lead by its MG Zoho lead id or MG Enquiry ID (partial too)', async () => {
+  const rows = [
+    { customer_name: 'Sue Stone', dealer_code: 'AU001', crm_record_id: '44707000062229229', enquiry_id: 'MGENQ84509' },
+    { customer_name: 'Clare Sullivan', dealer_code: 'AU001', crm_record_id: '44707000062229254', enquiry_id: 'MGENQ84534' },
+  ];
+  for (const [query, names] of [
+    ['44707000062229229', ['Sue Stone']], ['MGENQ84534', ['Clare Sullivan']], ['mgenq845', ['Sue Stone', 'Clare Sullivan']],
+    ['Sue 4470700006222', ['Sue Stone']],
+  ]) {
+    const db = createInMemoryZcql({ dealers: dealers.map((row) => ({ ...row })), leads: rows.map((row) => ({ ...row })) });
+    const admin = await adminSuggestions(db.app, query);
+    assert.deepEqual(admin.leads.map((row) => row.customer_name), names, query);
+    assert.equal(admin.leads[0].enquiry_id !== undefined && admin.leads[0].crm_record_id !== undefined, true, 'ids are returned');
+    const dealer = await dealerSuggestions(db.app, 'AU001', query);
+    assert.deepEqual(dealer.leads.map((row) => row.customer_name), names, query);
+  }
+});
