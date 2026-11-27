@@ -1,6 +1,6 @@
 // Start the next timer after the current request settles; hidden pages do
 // not poll, and returning to the page refreshes immediately.
-export function startVisiblePolling(task, intervalMs, page = document) {
+export function startVisiblePolling(task, intervalMs, page = document, { initialDelayMs = 0 } = {}) {
   let stopped = false;
   let running = false;
   let timer;
@@ -25,7 +25,9 @@ export function startVisiblePolling(task, intervalMs, page = document) {
     if (!page.hidden) run();
   };
   page.addEventListener("visibilitychange", onVisibilityChange);
-  run();
+  // An optional first delay lets a page's main data load before secondary panels ask.
+  if (initialDelayMs > 0) timer = setTimeout(run, initialDelayMs);
+  else run();
   return () => {
     stopped = true;
     clearTimeout(timer);

@@ -69,6 +69,7 @@ async function renderSignIn(elementId, config) {
  * server-side - see waitForSignedOut() below for why that matters.
  */
 async function signOut(redirectUrl) {
+  clearAuthTokenCache();
   const catalyst = await waitForCatalystSdk();
   catalyst.auth.signOut(redirectUrl);
 }
@@ -115,10 +116,46 @@ async function waitForSignedOut({ intervalMs = 150, timeoutMs = 5000 } = {}) {
  * mapping wasn't created yet) â€” callers must treat null as "context not
  * resolved," never fall back to showing all leads.
  */
+// A page load fires several API calls at once. Without this, each one asked the
+// SDK for its own token, and when the SDK's token cookie was missing or expired
+// every one of them made two auth round-trips of its own (6 calls = 12 extra
+// requests before any data loaded). Now concurrent callers share one in-flight
+// request, and the token is reused for a few minutes (Catalyst tokens last ~1h).
+const TOKEN_REUSE_MS = 5 * 60 * 1000;
+const TOKEN_EXPIRY_MARGIN_MS = 60 * 1000;
+let cachedToken = null;
+let cachedTokenUntil = 0;
+let tokenInFlight = null;
+
+function clearAuthTokenCache() {
+  cachedToken = null;
+  cachedTokenUntil = 0;
+}
+
 async function generateAuthToken() {
-  const catalyst = await waitForCatalystSdk();
-  const response = await catalyst.auth.generateAuthToken();
-  return response?.access_token ?? null;
+  if (cachedToken && Date.now() < cachedTokenUntil) return cachedToken;
+  if (tokenInFlight) return tokenInFlight;
+
+  tokenInFlight = (async () => {
+    const catalyst = await waitForCatalystSdk();
+    const response = await catalyst.auth.generateAuthToken();
+    const token = response?.access_token ?? null;
+    if (token) {
+      const expiresInMs = Number(response?.expires_in) * 1000;
+      const reuseMs = Number.isFinite(expiresInMs) && expiresInMs > 0
+        ? Math.min(TOKEN_REUSE_MS, expiresInMs - TOKEN_EXPIRY_MARGIN_MS)
+        : TOKEN_REUSE_MS;
+      cachedToken = reuseMs > 0 ? token : null;
+      cachedTokenUntil = reuseMs > 0 ? Date.now() + reuseMs : 0;
+    }
+    return token;
+  })();
+
+  try {
+    return await tokenInFlight;
+  } finally {
+    tokenInFlight = null;
+  }
 }
 
 async function getDealerContext(profile) {
@@ -155,6 +192,7 @@ export const authService = {
   waitForSignedOut,
   getDealerContext,
   generateAuthToken,
+  clearAuthTokenCache,
   sendPasswordReset
 };
 

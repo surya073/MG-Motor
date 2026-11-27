@@ -3,6 +3,7 @@ import { env } from "../../config/env";
 import { emitAuthEvent, AUTH_EVENTS } from "./authEvents";
 import { authService } from "./authService";
 import { authDebug } from "../../utils/authDebug";
+import { clearRequestCache } from "./requestCache";
 
 /**
  * axiosInstance.js
@@ -13,8 +14,8 @@ import { authDebug } from "../../utils/authDebug";
  * alone is not sufficient for this, even though it is sufficient for
  * direct Catalyst BaaS calls. This request interceptor attaches that
  * token to every outgoing call. Tokens are short-lived (1hr per
- * Catalyst's docs), so this fetches a fresh one per request rather than
- * caching — generateAuthToken() itself is cheap/fast.
+ * Catalyst's docs); authService shares one in-flight request between
+ * concurrent calls and reuses the token for a few minutes.
  */
 
 const axiosInstance = axios.create({
@@ -27,6 +28,8 @@ const axiosInstance = axios.create({
 });
 
 axiosInstance.interceptors.request.use(async (config) => {
+  // Any write may change a cached list (dealers etc.), so drop cached reads.
+  if (String(config.method || "get").toLowerCase() !== "get") clearRequestCache();
   try {
     const token = await authService.generateAuthToken();
     // TEMP DEBUG — remove once auth loop is confirmed fixed
@@ -51,6 +54,7 @@ axiosInstance.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error?.response?.status === 401) {
+      authService.clearAuthTokenCache();
       // TEMP DEBUG — remove once auth loop is confirmed fixed
       authDebug(
         "401 response body:",

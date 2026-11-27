@@ -1117,7 +1117,8 @@ function OutOfOrderEventsPanel() {
 
   useEffect(() => {
     mountedRef.current = true;
-    const stop = startVisiblePolling(load, OUT_OF_ORDER_REFRESH_MS);
+    // Secondary panel: let the leads table request go first on page open.
+    const stop = startVisiblePolling(load, OUT_OF_ORDER_REFRESH_MS, document, { initialDelayMs: 1200 });
     return () => {
       mountedRef.current = false;
       stop();

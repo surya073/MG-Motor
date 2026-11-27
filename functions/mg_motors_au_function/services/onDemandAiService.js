@@ -1,6 +1,6 @@
 'use strict';
 
-const XLSX = require('xlsx');
+// xlsx is loaded on first use (inside the parser): it adds ~200 ms to every cold start otherwise.
 const logger = require('../utils/logger');
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -81,6 +81,7 @@ async function extractFileText(base64Data, fileName) {
   const isSheet = /\.(xlsx|xls|csv)$/i.test(fileName || '');
 
   if (isSheet) {
+    const XLSX = require('xlsx');
     const wb = XLSX.read(buf, { type: 'buffer', cellDates: true, sheetRows: 60 });
     const sheetName = wb.SheetNames[0];
     if (!sheetName) throw Object.assign(new Error('The spreadsheet contains no sheets'), { code: 'INVALID_UPLOAD' });

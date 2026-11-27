@@ -1,4 +1,7 @@
 import axiosInstance from "./axiosInstance";
+import { cachedRequest } from "./requestCache";
+
+const DEALER_LIST_CACHE_MS = 30 * 1000;
 
 /**
  * adminDashboardService.js
@@ -18,9 +21,12 @@ export const adminDashboardService = {
     return data;
   },
 
-  async listDealers() {
-    const { data } = await axiosInstance.get("/mg_motors_au_function/admin/dealers");
-    return data.dealers;
+  // Shared by several pages; see requestCache.js (cleared on any write).
+  listDealers() {
+    return cachedRequest("admin/dealers", DEALER_LIST_CACHE_MS, async () => {
+      const { data } = await axiosInstance.get("/mg_motors_au_function/admin/dealers");
+      return data.dealers;
+    }).then((dealers) => (Array.isArray(dealers) ? [...dealers] : dealers));
   },
 
   async listLeads({ dealerCode, leadStatus } = {}) {

@@ -1,6 +1,6 @@
 'use strict';
 
-const nodemailer = require('nodemailer');
+// Loaded on first use: nodemailer adds ~100 ms to every cold start otherwise.
 const logger = require('../../utils/logger');
 const { projectDay } = require('../../utils/projectTime');
 const { notifyAdmins } = require('../notificationService');
@@ -32,7 +32,7 @@ function smtpConfigured() {
 function getSmtpTransport() {
   if (cachedTransport) return cachedTransport;
   const port = Number(process.env.SMTP_PORT) || 587;
-  cachedTransport = nodemailer.createTransport({
+  cachedTransport = require('nodemailer').createTransport({
     host: process.env.SMTP_HOST,
     port,
     // Implicit TLS on 465; STARTTLS on 587/25. Overridable for providers
