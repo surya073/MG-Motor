@@ -70,6 +70,10 @@
   --color-border: #F0EAEC;
   --color-border-strong: #E3D9DC;
   --color-border-hover: #CFC1C6;
+  /* Loading skeletons: own colours so they stay visible on white cards and
+     do not fade when the border palette is softened. */
+  --skeleton-base: #EFEBEC;
+  --skeleton-shine: rgba(255, 255, 255, 0.75);
   --color-border-focus: var(--color-primary);
   --color-border-selected: var(--color-primary);
 
@@ -269,6 +273,8 @@
   --color-border: rgba(255, 228, 234, 0.10);
   --color-border-strong: rgba(255, 228, 234, 0.18);
   --color-border-hover: rgba(255, 228, 234, 0.28);
+  --skeleton-base: rgba(255, 255, 255, 0.08);
+  --skeleton-shine: rgba(255, 255, 255, 0.10);
   --color-border-focus: var(--color-primary);
   --color-border-selected: var(--color-primary);
 

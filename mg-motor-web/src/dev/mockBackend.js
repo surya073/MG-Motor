@@ -327,7 +327,11 @@ export function installMockBackend() {
     if (typeof body === "string") {
       try { body = JSON.parse(body); } catch { /* keep as is */ }
     }
-    await new Promise((resolve) => setTimeout(resolve, 250)); // feel of a real request
+    // Feel of a real request. Set localStorage "mockDelayMs" (e.g. 4000) to slow every
+    // request down and inspect loading skeletons.
+    let delayMs = 250;
+    try { delayMs = Number(window.localStorage.getItem("mockDelayMs")) || 250; } catch { /* default */ }
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
     const { status, data } = route(method, config.url || "", body);
     const response = { data, status, statusText: String(status), headers: {}, config, request: {} };
     if (status >= 400) {

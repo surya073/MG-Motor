@@ -41,8 +41,9 @@ export default function Table({
               <tr key={rowIndex} className="table__row--skeleton">
                 {displayColumns.map((col, colIndex) => (
                   <td key={col.key} className={cellClassName(col)}>
+                    {/* Placeholder rows are not records, so no serial numbers either. */}
                     {col.key === SNO_COLUMN_KEY ? (
-                      rowIndex + 1 + serialOffset
+                      <span className="table__skeleton-bar" />
                     ) : (
                       <span
                         className="table__skeleton-bar"

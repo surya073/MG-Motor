@@ -728,7 +728,10 @@ export default function LeadExchangePage() {
                     {option.value === "happy" && <Smile size={15} />}
                     {option.value === "unhappy" && <Frown size={15} />}
                     {option.label}
-                    <span className="lead-exchange__path-pill-count">{count}</span>
+                    <span className="lead-exchange__path-pill-count">
+                      {/* No counts yet on first load: a placeholder, not a misleading 0. */}
+                      {loading && !facets ? <Skeleton width={14} height={10} radius="var(--radius-full)" /> : count}
+                    </span>
                   </button>
                 );
               })}

@@ -32,6 +32,8 @@ import { Alert, useAlerts } from "../../ui/Alerts/Alerts";
 import { useAuth } from "../../contexts/AuthContext";
 import { APP_ROLES } from "../../constants/auth.constants";
 import "./SyncLogsPage.css";
+import Skeleton from "../../ui/Skeleton/Skeleton";
+import "../../ui/Skeleton/Skeleton.css";
 
 const PAGE_SIZE_OPTIONS = [5, 10, 20, 50];
 
@@ -850,7 +852,9 @@ export default function SyncLogsPage() {
               {option.value === "happy" && <Smile size={15} />}
               {option.value === "unhappy" && <Frown size={15} />}
               {option.label}
-              <span className="sync-logs__path-pill-count">{count}</span>
+              <span className="sync-logs__path-pill-count">
+                {loading && logs.length === 0 ? <Skeleton width={14} height={10} radius="var(--radius-full)" /> : count}
+              </span>
             </button>
           );
         })}

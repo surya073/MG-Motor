@@ -35,6 +35,7 @@ import PathBadge from "../../ui/PathBadge/PathBadge";
 import Badge from "../../ui/Badge/Badge";
 import Dropdown from "../../ui/Dropdown/Dropdown";
 import Skeleton from "../../ui/Skeleton/Skeleton";
+import { ListSkeleton } from "../../ui/Skeleton/PageSkeletons";
 import Pagination from "../../ui/Pagination/Pagination";
 import { useAlerts } from "../../ui/Alerts/Alerts";
 import CloseButton from "../../ui/CloseButton/CloseButton";
@@ -1928,7 +1929,7 @@ export default function DealerCRMConfig() {
           <div className="dealer-crm-config__panel-header">
             <img src={mgLogo} alt="MG Motor" className="dealer-crm-config__brand-logo" />
             <h3>Our Dealers</h3>
-            <span className="dealer-crm-config__count">{connCounts.all}</span>
+            <span className="dealer-crm-config__count">{dealersLoading ? <Skeleton width={14} height={10} radius="var(--radius-full)" /> : connCounts.all}</span>
           </div>
 
           <div className="dealer-crm-config__search">
@@ -1965,16 +1966,15 @@ export default function DealerCRMConfig() {
                 aria-pressed={connFilter === key}
               >
                 {label}
-                <span>{connCounts[key]}</span>
+                <span>{dealersLoading ? <Skeleton width={14} height={10} radius="var(--radius-full)" /> : connCounts[key]}</span>
               </button>
             ))}
           </div>
 
           {dealersLoading ? (
             <div className="dealer-crm-config__dealer-list-scroll">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <Skeleton key={i} width="100%" height={52} />
-              ))}
+              {/* Same shape as a dealer row: icon, name + code, status pill. */}
+              <ListSkeleton rows={6} />
             </div>
           ) : (
             <>

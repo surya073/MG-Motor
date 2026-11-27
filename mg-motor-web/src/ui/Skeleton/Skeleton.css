@@ -10,7 +10,7 @@
   display: inline-block;
   position: relative;
   overflow: hidden;
-  background-color: var(--color-surface-alt);
+  background-color: var(--skeleton-base, var(--color-surface-alt));
   vertical-align: middle;
 }
 
@@ -21,7 +21,7 @@
   background: linear-gradient(
     100deg,
     transparent 0%,
-    color-mix(in srgb, var(--color-border-strong) 55%, transparent) 50%,
+    var(--skeleton-shine, rgba(255, 255, 255, 0.6)) 50%,
     transparent 100%
   );
   transform: translateX(-100%);
