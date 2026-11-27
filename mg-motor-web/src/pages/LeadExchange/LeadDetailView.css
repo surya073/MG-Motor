@@ -830,22 +830,6 @@
    INTEGRATION PATH CARD
    ========================================================= */
 
-.lead-detail__path-card {
-  border-left: 3px solid var(--color-border-strong);
-}
-
-.lead-detail__path-card--happy {
-  border-left-color: var(--color-success);
-}
-
-.lead-detail__path-card--unhappy {
-  border-left-color: var(--color-danger);
-}
-
-.lead-detail__path-card--neutral {
-  border-left-color: var(--color-text-muted);
-}
-
 .lead-detail__path-card-body {
   display: flex;
   align-items: flex-start;
@@ -1826,3 +1810,196 @@
   background: var(--color-primary-soft, #e8f0fe);
   color: var(--color-primary, #1a56db);
 }
+
+/* ================================================================
+   Dealer Activity panel (dact): summary, type filter, day groups
+================================================================ */
+.dact { display: flex; flex-direction: column; gap: var(--space-4, 16px); }
+
+/* Colour per activity kind; soft backgrounds are mixed from it so both themes work. */
+.dact__icon, .dact__chip { --tone: var(--color-text-muted, #6b7280); }
+.dact__icon--call, .dact__chip--call { --tone: #16a34a; }
+.dact__icon--sms, .dact__chip--sms { --tone: #2563eb; }
+.dact__icon--ai, .dact__chip--ai { --tone: #0891b2; }
+.dact__icon--email, .dact__chip--email { --tone: #7c3aed; }
+.dact__icon--note, .dact__chip--note { --tone: #d97706; }
+.dact__icon--person, .dact__chip--person { --tone: #db2777; }
+
+/* Summary strip */
+.dact__summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3, 12px);
+}
+.dact__stat {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: var(--space-3, 12px) var(--space-4, 16px);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border-subtle, var(--color-border));
+  border-radius: var(--radius-md, 10px);
+  min-width: 0;
+}
+.dact__stat-label {
+  font-size: var(--fs-xs, 12px); font-weight: var(--fw-semibold, 600);
+  color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.04em;
+}
+.dact__stat-value {
+  font-size: var(--fs-sm, 14px); font-weight: var(--fw-semibold, 600);
+  color: var(--color-text-primary); overflow-wrap: anywhere;
+}
+.dact__stat-sub {
+  display: block; margin-top: 2px;
+  font-size: var(--fs-xs, 12px); font-weight: 400; color: var(--color-text-muted);
+}
+
+/* Filter chips */
+.dact__filters { display: flex; flex-wrap: wrap; gap: var(--space-2, 8px); }
+.dact__chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px;
+  font: inherit; font-size: var(--fs-sm, 13px); font-weight: var(--fw-medium, 500);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-elevated, transparent);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.dact__chip svg { color: var(--tone); }
+.dact__chip:hover { border-color: var(--tone); }
+.dact__chip:focus-visible { outline: 2px solid var(--color-border-focus, var(--tone)); outline-offset: 2px; }
+.dact__chip.is-active {
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--tone) 14%, transparent);
+  border-color: var(--tone);
+}
+.dact__chip:not([class*="dact__chip--"]).is-active { --tone: var(--color-primary); }
+.dact__chip-count {
+  min-width: 20px; padding: 0 6px;
+  font-size: 11px; font-weight: var(--fw-semibold, 600); line-height: 18px; text-align: center;
+  color: var(--color-text-secondary);
+  background: var(--color-surface-alt);
+  border-radius: 999px;
+}
+
+/* Day groups */
+.dact__scroll { max-height: 520px; overflow-y: auto; padding-right: 4px; }
+.dact__day + .dact__day { margin-top: var(--space-4, 16px); }
+.dact__day-label {
+  position: sticky; top: 0; z-index: 1;
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 0 var(--space-2, 8px);
+  padding: 4px 0;
+  font-size: var(--fs-xs, 12px); font-weight: var(--fw-semibold, 600);
+  letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--color-text-muted);
+  background: var(--color-bg-elevated);
+}
+.dact__day-label span {
+  padding: 0 7px; font-size: 11px; line-height: 18px;
+  background: var(--color-surface-alt); border-radius: 999px;
+}
+
+/* Items: a vertical rail joins the icons within a day */
+.dact__list { list-style: none; margin: 0; padding: 0; position: relative; }
+.dact__item {
+  position: relative;
+  display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: var(--space-3, 12px);
+  padding: 10px 12px 10px 10px;
+  border-radius: var(--radius-md, 10px);
+}
+.dact__item + .dact__item { margin-top: 10px; }
+.dact__item--trigger {
+  background: color-mix(in srgb, var(--color-primary) 6%, transparent);
+}
+.dact__icon {
+  position: relative; z-index: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px;
+  color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 14%, var(--color-bg-elevated, #fff));
+  border: 1px solid color-mix(in srgb, var(--tone) 30%, transparent);
+  border-radius: 50%;
+}
+.dact__body { min-width: 0; }
+.dact__row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.dact__kind { font-size: var(--fs-sm, 14px); font-weight: var(--fw-semibold, 600); color: var(--color-text-primary); }
+.dact__who, .dact__followup {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px;
+  font-size: 12px; font-weight: var(--fw-medium, 500);
+  border-radius: 999px;
+}
+.dact__who { color: var(--color-text-secondary); background: var(--color-surface-alt); }
+.dact__who--auto { font-style: italic; color: var(--color-text-muted); }
+.dact__followup {
+  color: var(--color-primary);
+  background: var(--color-primary-soft, color-mix(in srgb, var(--color-primary) 12%, transparent));
+  font-weight: var(--fw-semibold, 600);
+}
+.dact__time {
+  margin-left: auto;
+  font-size: 12px; color: var(--color-text-muted); white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.dact__text {
+  margin: 4px 0 0;
+  font-size: var(--fs-sm, 13.5px); line-height: 1.5;
+  color: var(--color-text-secondary); overflow-wrap: anywhere; white-space: pre-line;
+}
+.dact__text--clamped {
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.dact__more {
+  margin-top: 2px; padding: 0;
+  font: inherit; font-size: 12px; font-weight: var(--fw-semibold, 600);
+  color: var(--color-primary); background: none; border: 0; cursor: pointer;
+}
+.dact__none, .dact__empty p { margin: 0; font-size: var(--fs-sm, 13px); color: var(--color-text-muted); }
+.dact__empty {
+  display: flex; align-items: center; gap: 10px;
+  padding: var(--space-4, 16px);
+  color: var(--color-text-muted);
+  background: var(--color-surface-alt);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md, 10px);
+}
+
+@media (max-width: 720px) {
+  .dact__summary { grid-template-columns: 1fr; }
+  .dact__time { margin-left: 0; width: 100%; }
+}
+
+/* Dealer Activity "View full" modal */
+.dact__modal-title {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2, 8px);
+}
+.dact__modal-sub {
+  font-size: var(--fs-sm, 13px); font-weight: var(--fw-medium, 500);
+  color: var(--color-text-muted);
+}
+/* The modal body scrolls, so the list inside it does not need its own scroll. */
+.modal .dact__scroll { max-height: none; overflow: visible; padding-right: 0; }
+.modal .dact__day-label { top: calc(-1 * var(--space-5, 20px)); padding-top: var(--space-2, 8px); }
+.modal { max-height: 88vh; }
+
+/* Smaller Happy / Unhappy path badges on the lead detail page only
+   (PathBadge is shared; other pages keep its default sizes). */
+.lead-detail .path-badge {
+  gap: 4px;
+  padding: 1px 8px 1px 2px;
+  font-size: 11px;
+  line-height: 1.25;
+}
+.lead-detail .path-badge .path-badge__face { width: 16px; height: 16px; }
+.lead-detail .path-badge .path-badge__face svg { width: 11px; height: 11px; }
+.lead-detail .path-badge--md {
+  gap: 5px;
+  padding: 2px 10px 2px 3px;
+  font-size: 12px;
+}
+.lead-detail .path-badge--md .path-badge__face { width: 18px; height: 18px; }
+.lead-detail .path-badge--md .path-badge__face svg { width: 12px; height: 12px; }
+.lead-detail .path-badge--current { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--pb-fg) 28%, transparent); }
+/* The integration-path card's badge carries extra padding of its own. */
+.lead-detail .path-badge.lead-detail__path-id { padding: 2px 10px 2px 3px; }

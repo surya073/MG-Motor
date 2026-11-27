@@ -242,6 +242,12 @@
   min-height: 320px;
   border: none;
   display: block;
+  /* The Catalyst sign-in page inside uses the default (light) color scheme. In the
+     dark theme this page is color-scheme: dark, and a browser paints an OPAQUE WHITE
+     backdrop behind an iframe whose scheme differs from its embedder's. Matching the
+     iframe's own scheme keeps it transparent, so embedded-auth.css's dark form shows. */
+  color-scheme: light;
+  background: transparent;
 }
 
 .login-page__divider {

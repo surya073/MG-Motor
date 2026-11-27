@@ -1,5 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Activity, ArrowRight, Barcode, Bot, CalendarCheck, CalendarDays, CarFront, Check, CircleCheck, CircleX, Clock, Clock3,
+  FileText, Globe, Mail, Megaphone, MessageSquare, Phone, RefreshCw, ShieldCheck, StickyNote, TrendingUp, UserCog, UserRound, Users,
+} from "lucide-react";
 import { adminDashboardService } from "../../services/api/adminDashboardService";
 import { dealerCrmIntegrationService } from "../../services/api/dealerCrmIntegrationService";
 import { useAuth } from "../../contexts/AuthContext";
@@ -12,7 +15,6 @@ import {
   UserIcon,
   ClipboardIcon,
   BuildingIcon,
-  CarIcon,
   MegaphoneIcon,
   ArrowRightIcon,
   NoteIcon,
@@ -20,11 +22,14 @@ import {
   PencilIcon,
 } from "../../ui/icons";
 import mgLogo from "../../assets/images/mg-logo-single.png";
+import mgCarImage from "../../assets/dashboardimgs/mgcarpng1.png";
 import { isValidAustralianMobile } from "../../utils/mobileValidation";
 import CloseButton from "../../ui/CloseButton/CloseButton";
+import Modal from "../../ui/Modal/Modal";
 import PathBadge from "../../ui/PathBadge/PathBadge";
 import { CompactListSkeleton } from "../../ui/Skeleton/PageSkeletons";
 import "./LeadDetailView.css";
+import "./MoreDetails.css";
 
 /* ----------------------------------------------------------------
    Status -> visual tone
@@ -553,6 +558,7 @@ function activityFollowUps(timeline, currentStatus) {
   return { byActivity, current };
 }
 
+// The compact list on the lead page; "View full" opens DealerActivityPanel in a modal.
 function DealerActivityList({ activities, loading, followUps = {} }) {
   if (loading) {
     return (
@@ -585,6 +591,203 @@ function DealerActivityList({ activities, loading, followUps = {} }) {
       </div>
     </li>
   ));
+}
+
+/* ----------------------------------------------------------------
+   Dealer Activity panel (in the "View full" modal): summary, type filter, day groups
+------------------------------------------------------------------ */
+const SYDNEY = "Australia/Sydney";
+
+// Each activity kind: label, plural for counts/filters, icon and colour tone.
+const ACTIVITY_KINDS = {
+  phone: { label: "Call", plural: "Calls", Icon: Phone, tone: "call" },
+  sms: { label: "SMS", plural: "SMS", Icon: MessageSquare, tone: "sms" },
+  ai_sms: { label: "AI SMS", plural: "AI SMS", Icon: Bot, tone: "ai" },
+  email: { label: "Email", plural: "Emails", Icon: Mail, tone: "email" },
+  note: { label: "Note", plural: "Notes", Icon: StickyNote, tone: "note" },
+  in_person: { label: "In person", plural: "In person", Icon: UserRound, tone: "person" },
+};
+
+function activityKind(type) {
+  const key = String(type || "").toLowerCase();
+  const label = dealerActivityLabel(key);
+  return { key: key || "other", ...(ACTIVITY_KINDS[key] || { label, plural: label, Icon: Activity, tone: "other" }) };
+}
+
+const dayKey = (date) => new Intl.DateTimeFormat("en-CA", { timeZone: SYDNEY }).format(date);
+const timeOnly = (date) => date.toLocaleTimeString("en-AU", { timeZone: SYDNEY, hour: "numeric", minute: "2-digit" });
+
+function dayLabel(date, now = new Date()) {
+  const key = dayKey(date);
+  if (key === dayKey(now)) return "Today";
+  if (key === dayKey(new Date(now.getTime() - 86400000))) return "Yesterday";
+  return date.toLocaleDateString("en-AU", { timeZone: SYDNEY, weekday: "short", day: "numeric", month: "short", year: "numeric" });
+}
+
+function timeAgo(date, now = new Date()) {
+  const minutes = Math.round((now - date) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+const toDate = (value) => {
+  const date = value ? new Date(value) : null;
+  return date && !Number.isNaN(date.getTime()) ? date : null;
+};
+
+const LONG_DESCRIPTION = 180;
+
+function DealerActivityItem({ activity, followUp }) {
+  const [expanded, setExpanded] = useState(false);
+  const kind = activityKind(activity.event_type);
+  const at = toDate(activity.created_at);
+  const text = activity.description || "";
+  const long = text.length > LONG_DESCRIPTION;
+  return (
+    <li className={`dact__item${followUp ? " dact__item--trigger" : ""}`}>
+      <span className={`dact__icon dact__icon--${kind.tone}`} aria-hidden="true">
+        <kind.Icon size={15} strokeWidth={2} />
+      </span>
+      <div className="dact__body">
+        <div className="dact__row">
+          <span className="dact__kind">{kind.label}</span>
+          {activity.user_name ? (
+            <span className="dact__who">
+              <UserRound size={12} aria-hidden="true" /> {activity.user_name}
+            </span>
+          ) : (
+            <span className="dact__who dact__who--auto" title="Logged by the dealer's system, not a person">
+              <Bot size={12} aria-hidden="true" /> Automated
+            </span>
+          )}
+          {followUp && (
+            <span className="dact__followup" title="This activity moved MG's Enquiry Status">
+              <TrendingUp size={12} aria-hidden="true" /> Triggered {followUp}
+            </span>
+          )}
+          <time className="dact__time" dateTime={activity.created_at || undefined} title={formatDealerActivityTime(activity.created_at)}>
+            {at ? timeOnly(at) : "—"}
+          </time>
+        </div>
+        {text && (
+          <p className={`dact__text${long && !expanded ? " dact__text--clamped" : ""}`}>{text}</p>
+        )}
+        {long && (
+          <button type="button" className="dact__more" onClick={() => setExpanded((v) => !v)}>
+            {expanded ? "Show less" : "Show more"}
+          </button>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function DealerActivityPanel({ activities, loading, followUps = {} }) {
+  const [filter, setFilter] = useState("all");
+  // Newest first: the latest contact attempt is what an operator looks for.
+  const sorted = useMemo(
+    () => [...(activities || [])].sort((a, b) => (toDate(b.created_at)?.getTime() || 0) - (toDate(a.created_at)?.getTime() || 0)),
+    [activities]
+  );
+  const counts = useMemo(() => {
+    const map = new Map();
+    sorted.forEach((a) => {
+      const kind = activityKind(a.event_type);
+      const entry = map.get(kind.key) || { ...kind, count: 0 };
+      entry.count += 1;
+      map.set(kind.key, entry);
+    });
+    return [...map.values()].sort((a, b) => b.count - a.count);
+  }, [sorted]);
+
+  if (loading) return <CompactListSkeleton rows={3} />;
+  if (sorted.length === 0) {
+    return (
+      <div className="dact__empty">
+        <Activity size={18} aria-hidden="true" />
+        <p>No calls, messages or notes from the dealer yet.</p>
+      </div>
+    );
+  }
+
+  const visible = filter === "all" ? sorted : sorted.filter((a) => activityKind(a.event_type).key === filter);
+  const groups = [];
+  visible.forEach((activity) => {
+    const at = toDate(activity.created_at);
+    const key = at ? dayKey(at) : "unknown";
+    let group = groups[groups.length - 1];
+    if (!group || group.key !== key) {
+      group = { key, label: at ? dayLabel(at) : "Date unknown", items: [] };
+      groups.push(group);
+    }
+    group.items.push(activity);
+  });
+
+  const first = toDate(sorted[sorted.length - 1].created_at);
+  const latest = toDate(sorted[0].created_at);
+  const people = new Set(sorted.map((a) => a.user_name).filter(Boolean));
+
+  return (
+    <div className="dact">
+      <div className="dact__summary">
+        <div className="dact__stat">
+          <span className="dact__stat-label">First contact</span>
+          <span className="dact__stat-value">{first ? formatDealerActivityTime(first) : "—"}</span>
+        </div>
+        <div className="dact__stat">
+          <span className="dact__stat-label">Latest activity</span>
+          <span className="dact__stat-value">
+            {latest ? timeAgo(latest) : "—"}
+            {latest && <span className="dact__stat-sub">{formatDealerActivityTime(latest)}</span>}
+          </span>
+        </div>
+        <div className="dact__stat">
+          <span className="dact__stat-label">Dealer staff</span>
+          <span className="dact__stat-value">{people.size ? [...people].join(", ") : "Automated only"}</span>
+        </div>
+      </div>
+
+      <div className="dact__filters" role="group" aria-label="Filter dealer activity by type">
+        <button type="button" className={`dact__chip${filter === "all" ? " is-active" : ""}`} aria-pressed={filter === "all"} onClick={() => setFilter("all")}>
+          All <span className="dact__chip-count">{sorted.length}</span>
+        </button>
+        {counts.map((kind) => (
+          <button
+            key={kind.key}
+            type="button"
+            className={`dact__chip dact__chip--${kind.tone}${filter === kind.key ? " is-active" : ""}`}
+            aria-pressed={filter === kind.key}
+            onClick={() => setFilter(filter === kind.key ? "all" : kind.key)}
+          >
+            <kind.Icon size={13} aria-hidden="true" /> {kind.plural} <span className="dact__chip-count">{kind.count}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="dact__scroll">
+        {groups.length === 0 ? (
+          <p className="dact__none">No activity of this type.</p>
+        ) : (
+          groups.map((group) => (
+            <section key={group.key} className="dact__day" aria-label={group.label}>
+              <h4 className="dact__day-label">
+                {group.label} <span>{group.items.length}</span>
+              </h4>
+              <ul className="dact__list">
+                {group.items.map((activity) => (
+                  <DealerActivityItem key={activity.id} activity={activity} followUp={followUps[activity.id]} />
+                ))}
+              </ul>
+            </section>
+          ))
+        )}
+      </div>
+    </div>
+  );
 }
 
 function normalize(value) {
@@ -871,7 +1074,57 @@ function crmBadgeTone(crm) {
   return "other";
 }
 
-function MoreDetailsCard({ val, lead }) {
+/* ----------------------------------------------------------------
+   More Details: banner header, red-bar section titles, icon tiles
+------------------------------------------------------------------ */
+function DetailTile({ icon: Icon, label, value, mono = false, copy = false, rawValue, copied, onCopy, tone, highlight = false }) {
+  const shown = value === undefined || value === null || value === "" ? "—" : value;
+  const copyable = copy && (rawValue ?? shown) && (rawValue ?? shown) !== "—";
+  return (
+    <div className={`md-tile${highlight ? " md-tile--highlight" : ""}`}>
+      <span className="md-tile__icon" aria-hidden="true">
+        <Icon size={20} strokeWidth={2} />
+      </span>
+      <div className="md-tile__body">
+        <span className="md-tile__label">{label}</span>
+        <span className="md-tile__valuerow">
+          <span className={`md-tile__value${mono ? " md-tile__value--mono" : ""}${tone ? ` md-tile__value--${tone}` : ""}`} title={typeof shown === "string" ? shown : undefined}>
+            {shown}
+          </span>
+          {copyable && (
+            <button type="button" className="md-tile__copy" onClick={() => onCopy(rawValue ?? shown)} aria-label={`Copy ${label}`}>
+              {copied ? <Check size={14} /> : <CopyIcon />}
+            </button>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function ConsentTile({ icon: Icon, label, value }) {
+  const yes = value === "Yes";
+  return (
+    <div className={`md-consent md-consent--${yes ? "yes" : "no"}`}>
+      <span className="md-consent__icon" aria-hidden="true">
+        <Icon size={24} strokeWidth={2} />
+      </span>
+      <div className="md-consent__body">
+        <span className="md-consent__label">{label}</span>
+        {yes ? (
+          <span className="md-consent__pill">
+            <CircleCheck size={15} strokeWidth={2.4} /> Yes
+          </span>
+        ) : (
+          <span className="md-consent__value">{value}</span>
+        )}
+      </div>
+      <Icon className="md-consent__watermark" size={88} strokeWidth={1.2} aria-hidden="true" />
+    </div>
+  );
+}
+
+function MoreDetailsCard({ val, lead, onViewHistory }) {
   // Confirms the dealer CRM actually accepted and created the record for
   // this enquiry (Happy 1). Written once the outbound push succeeds and
   // cleared if reconciliation later finds the dealer no longer has it, so
@@ -879,128 +1132,112 @@ function MoreDetailsCard({ val, lead }) {
   const dealerCrmRecordId = lead.dealer_crm_record_id;
 
   const [copiedKey, setCopiedKey] = useState(null);
-  const copyValue = (key, value) => {
+  const copyValue = (key) => (value) => {
     if (!value) return;
     navigator.clipboard?.writeText(String(value));
     setCopiedKey(key);
     setTimeout(() => setCopiedKey(null), 1500);
   };
-
-  // Grouped so the long record IDs sit together, apart from the lead facts and
-  // the consent flags. `mono` = identifier styling, `copy` = copy button.
-  const sections = [
-    {
-      title: "Lead Exchange Activity",
-      items: [
-        { key: "connectedCrm", label: "Connected CRM", value: val("connected_crm"), icon: BuildingIcon },
-        { key: "outcome", label: "Enquiry Outcome", value: formatEnquiryOutcome(lead.enquiry_outcome), icon: ClipboardIcon },
-        { key: "testDrive", label: "Test Drive Date", value: formatActivityDate(lead.test_drive_date), icon: ClockIcon },
-        { key: "closed", label: "Closed Date", value: formatActivityDate(lead.closed_date), icon: ClockIcon },
-        // Fusion cannot be read back, so this is the word Fusion last sent (Open, Won,
-        // Delivered, Lost, Prospect Lost). Shown only for leads connected to Fusion.
-        ...(/fusion/i.test(String(lead.connected_crm || ""))
-          ? [{
-              key: "fusionStatus",
-              label: "Fusion current status",
-              value: lead.dealer_crm_status || "Not reported yet",
-              icon: ClipboardIcon,
-            }]
-          : []),
-      ],
-    },
-    {
-      title: "Record IDs",
-      className: "lead-detail__more-details-grid--ids",
-      items: [
-        { key: "crm", label: "CRM Record ID", value: val("crm_record_id"), icon: ClipboardIcon, mono: true, copy: true },
-        {
-          key: "dealer",
-          label: "Dealer CRM Record ID",
-          value: dealerCrmRecordId || "Not yet confirmed by dealer",
-          valueClass: dealerCrmRecordId
-            ? "lead-detail__more-details-value--confirmed"
-            : "lead-detail__more-details-value--pending",
-          icon: ClipboardIcon,
-          mono: Boolean(dealerCrmRecordId),
-          copy: Boolean(dealerCrmRecordId),
-          rawValue: dealerCrmRecordId,
-        },
-        { key: "enquiry", label: "Enquiry ID", value: val("enquiry_id"), icon: ClipboardIcon, mono: true, copy: true },
-      ],
-    },
-    {
-      title: "Lead Info",
-      items: [
-        { key: "source", label: "Lead Source", value: val("lead_source"), icon: MegaphoneIcon },
-        { key: "postcode", label: "Postcode", value: val("postcode"), icon: BuildingIcon },
-        { key: "assigned", label: "Assigned Date", value: val("assigned_date"), icon: ClockIcon },
-        { key: "status", label: "Last Status Update", value: val("last_status_update"), icon: ClockIcon },
-        { key: "followup", label: "Next Follow-up", value: val("next_followup_date"), icon: ClockIcon },
-      ],
-    },
-    {
-      title: "Consent",
-      items: [
-        { key: "privacy", label: "Privacy Policy Accepted", value: formatBoolean(lead.accept_privacy_policy), icon: UserIcon, pill: true },
-        { key: "marketing", label: "Marketing Opt-in", value: formatBoolean(lead.receive_marketing_updates), icon: MegaphoneIcon, pill: true },
-      ],
-    },
-  ];
+  const isFusion = /fusion/i.test(String(lead.connected_crm || ""));
 
   return (
-    <section className="lead-detail__group lead-detail__more-details-card">
-      <h3>
-        <span className="lead-detail__group-icon">
-          <ClipboardIcon size={15} />
+    <section className="md-card">
+      <header className="md-banner">
+        <span className="md-banner__icon" aria-hidden="true">
+          <FileText size={26} strokeWidth={2.2} />
         </span>
-        More Details
-      </h3>
-      {sections.map((section) => (
-        <div className="lead-detail__more-details-section" key={section.title}>
-          <h4 className="lead-detail__more-details-section-title">{section.title}</h4>
-          <div className={`lead-detail__more-details-grid ${section.className || ""}`}>
-            {section.items.map(({ key, label, value, valueClass, icon: Icon, mono, copy, pill, rawValue }) => (
-              <div className="lead-detail__more-details-item" key={key}>
-                <span className="lead-detail__more-details-icon">
-                  <Icon size={15} />
-                </span>
-                <div>
-                  <span className="lead-detail__more-details-label">{label}</span>
-                  <span className="lead-detail__more-details-valuewrap">
-                    {pill ? (
-                      <span
-                        className={`lead-detail__more-details-pill ${
-                          value === "Yes" ? "lead-detail__more-details-pill--yes" : "lead-detail__more-details-pill--no"
-                        }`}
-                      >
-                        {value}
-                      </span>
-                    ) : (
-                      <span
-                        className={`lead-detail__more-details-value ${mono ? "lead-detail__more-details-value--mono" : ""} ${valueClass || ""}`}
-                        title={typeof value === "string" ? value : undefined}
-                      >
-                        {value}
-                      </span>
-                    )}
-                    {copy && (rawValue ?? value) && (rawValue ?? value) !== "—" && (
-                      <button
-                        type="button"
-                        className="lead-detail__copy-btn"
-                        onClick={() => copyValue(key, rawValue ?? value)}
-                        aria-label={`Copy ${label}`}
-                      >
-                        <CopyIcon />
-                      </button>
-                    )}
-                    {copiedKey === key && <span className="lead-detail__copied-tag">Copied</span>}
-                  </span>
-                </div>
-              </div>
-            ))}
+        <div className="md-banner__text">
+          <h3 className="md-banner__title">More Details</h3>
+          <p className="md-banner__sub">Lead and activity information</p>
+        </div>
+        <div className="md-banner__art" aria-hidden="true">
+          <span className="md-banner__tagline">Driven by you</span>
+          <img src={mgCarImage} alt="" className="md-banner__car" />
+        </div>
+      </header>
+
+      <div className="md-content">
+        <div className="md-section">
+          <div className="md-section__head">
+            <h4 className="md-section__title">Lead Exchange Activity</h4>
+            {onViewHistory && (
+              <button type="button" className="md-section__link" onClick={onViewHistory}>
+                View Activity History <ArrowRight size={15} strokeWidth={2.2} />
+              </button>
+            )}
+          </div>
+          <div className={`md-grid md-grid--${isFusion ? 5 : 4}`}>
+            <DetailTile icon={Users} label="Connected CRM" value={val("connected_crm")} />
+            <DetailTile icon={CalendarCheck} label="Enquiry Outcome" value={formatEnquiryOutcome(lead.enquiry_outcome)} />
+            <DetailTile icon={Clock} label="Test Drive Date" value={formatActivityDate(lead.test_drive_date)} />
+            <DetailTile icon={CircleX} label="Closed Date" value={formatActivityDate(lead.closed_date)} />
+            {/* Fusion cannot be read back, so this is the word Fusion last sent (Open, Won,
+                Delivered, Lost, Prospect Lost). Shown only for leads connected to Fusion. */}
+            {isFusion && <DetailTile icon={FileText} label="Fusion current status" value={lead.dealer_crm_status || "Not reported yet"} />}
           </div>
         </div>
-      ))}
+
+        <div className="md-section">
+          <div className="md-section__head">
+            <h4 className="md-section__title">Record IDs</h4>
+          </div>
+          <div className="md-grid md-grid--3">
+            <DetailTile
+              icon={FileText}
+              label="CRM Record ID"
+              value={val("crm_record_id")}
+              mono
+              copy
+              copied={copiedKey === "crm"}
+              onCopy={copyValue("crm")}
+            />
+            <DetailTile
+              icon={UserCog}
+              label="Dealer CRM Record ID"
+              value={dealerCrmRecordId || "Not yet confirmed by dealer"}
+              rawValue={dealerCrmRecordId}
+              mono={Boolean(dealerCrmRecordId)}
+              tone={dealerCrmRecordId ? "ok" : "pending"}
+              copy={Boolean(dealerCrmRecordId)}
+              copied={copiedKey === "dealer"}
+              onCopy={copyValue("dealer")}
+              highlight
+            />
+            <DetailTile
+              icon={FileText}
+              label="Enquiry ID"
+              value={val("enquiry_id")}
+              mono
+              copy
+              copied={copiedKey === "enquiry"}
+              onCopy={copyValue("enquiry")}
+            />
+          </div>
+        </div>
+
+        <div className="md-section">
+          <div className="md-section__head">
+            <h4 className="md-section__title">Lead Info</h4>
+          </div>
+          <div className="md-grid md-grid--5">
+            <DetailTile icon={Globe} label="Lead Source" value={val("lead_source")} />
+            <DetailTile icon={Barcode} label="Postcode" value={val("postcode")} />
+            <DetailTile icon={CalendarDays} label="Assigned Date" value={val("assigned_date")} />
+            <DetailTile icon={Clock3} label="Last Status Update" value={val("last_status_update")} />
+            <DetailTile icon={ArrowRight} label="Next Follow-up" value={val("next_followup_date")} />
+          </div>
+        </div>
+
+        <div className="md-section">
+          <div className="md-section__head">
+            <h4 className="md-section__title">Consent</h4>
+          </div>
+          <div className="md-grid md-grid--2">
+            <ConsentTile icon={ShieldCheck} label="Privacy Policy Accepted" value={formatBoolean(lead.accept_privacy_policy)} />
+            <ConsentTile icon={Megaphone} label="Marketing Opt-in" value={formatBoolean(lead.receive_marketing_updates)} />
+          </div>
+        </div>
+      </div>
     </section>
   );
 }
@@ -1134,6 +1371,7 @@ export default function LeadDetailView({ lead, onBack, onLeadChanged }) {
   const [timelineOffcanvasOpen, setTimelineOffcanvasOpen] = useState(false);
   const [dealerActivities, setDealerActivities] = useState({ available: true, activities: [] });
   const [dealerActivitiesLoading, setDealerActivitiesLoading] = useState(true);
+  const [activityModalOpen, setActivityModalOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [updatedAt, setUpdatedAt] = useState(() => new Date());
   const { showAlert } = useAlerts();
@@ -1362,7 +1600,7 @@ export default function LeadDetailView({ lead, onBack, onLeadChanged }) {
 
         <div className="lead-detail__vehicle-highlight">
           <span className="lead-detail__vehicle-icon">
-            <CarIcon size={21} />
+            <CarFront size={22} strokeWidth={1.9} />
           </span>
           <div className="lead-detail__vehicle-content">
             <span className="lead-detail__vehicle-label">Vehicle</span>
@@ -1438,7 +1676,7 @@ export default function LeadDetailView({ lead, onBack, onLeadChanged }) {
 
       <DeliveryActions lead={lead} onDone={onLeadChanged} />
 
-      <MoreDetailsCard val={val} lead={lead} />
+      <MoreDetailsCard val={val} lead={lead} onViewHistory={() => setTimelineOffcanvasOpen(true)} />
 
       {/* ========================================================== CUSTOMER MESSAGE + TIMELINE ========================================================== */}
       <div className="lead-detail__footer-groups">
@@ -1499,7 +1737,40 @@ export default function LeadDetailView({ lead, onBack, onLeadChanged }) {
               />
             </ul>
           </div>
+          {!dealerActivitiesLoading && dealerActivities.activities.length > 0 && (
+            <button
+              type="button"
+              className="lead-detail__timeline-viewfull-btn"
+              onClick={() => setActivityModalOpen(true)}
+            >
+              View Full Activity ({dealerActivities.activities.length})
+            </button>
+          )}
         </section>
+      )}
+
+      {activityModalOpen && (
+        <Modal
+          width={1100}
+          onClose={() => setActivityModalOpen(false)}
+          title={
+            <span className="dact__modal-title">
+              <span className="lead-detail__group-icon">
+                <PhoneIcon size={15} />
+              </span>
+              Dealer Activity
+              <span className="dact__modal-sub">
+                {lead.customer_name || "Lead"} · {lead.dealer_name || lead.dealer_code || "Dealer"}
+              </span>
+            </span>
+          }
+        >
+          <DealerActivityPanel
+            activities={dealerActivities.activities}
+            loading={dealerActivitiesLoading}
+            followUps={activityFollowUpInfo.byActivity}
+          />
+        </Modal>
       )}
 
       {/* ========================================================== DEALER REMARKS ========================================================== */}

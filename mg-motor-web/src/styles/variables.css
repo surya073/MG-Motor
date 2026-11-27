@@ -64,10 +64,12 @@
      - focus:    ring color for :focus-visible (paired with --shadow-focus-ring)
      - selected: border for an actively-selected/checked state (chips, active filters)
   */
-  --color-border-subtle: rgba(22, 24, 28, 0.07);
-  --color-border: rgba(22, 24, 28, 0.14);
-  --color-border-strong: rgba(22, 24, 28, 0.24);
-  --color-border-hover: rgba(22, 24, 28, 0.34);
+  /* Warm rose-grey borders that sit with the white + MG red theme
+     (plain grey looked dull against it). */
+  --color-border-subtle: #F7F3F4;
+  --color-border: #F0EAEC;
+  --color-border-strong: #E3D9DC;
+  --color-border-hover: #CFC1C6;
   --color-border-focus: var(--color-primary);
   --color-border-selected: var(--color-primary);
 
@@ -263,10 +265,10 @@
      stay visible at all — bumped further here (in step with the light
      theme's increase above) so the two themes feel like a matched pair
      rather than dark mode being comparatively flatter. */
-  --color-border-subtle: rgba(255, 255, 255, 0.09);
-  --color-border: rgba(255, 255, 255, 0.16);
-  --color-border-strong: rgba(255, 255, 255, 0.28);
-  --color-border-hover: rgba(255, 255, 255, 0.40);
+  --color-border-subtle: rgba(255, 228, 234, 0.06);
+  --color-border: rgba(255, 228, 234, 0.10);
+  --color-border-strong: rgba(255, 228, 234, 0.18);
+  --color-border-hover: rgba(255, 228, 234, 0.28);
   --color-border-focus: var(--color-primary);
   --color-border-selected: var(--color-primary);
 
