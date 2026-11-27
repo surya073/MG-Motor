@@ -369,6 +369,9 @@ function timelineDetailText(entry) {
   const parts = [];
   if (statusChange) {
     parts.push(`Status changed: ${statusChange.from || "—"} → ${statusChange.to || "—"}`);
+    // Activity-based Follow-up 1 / 2: which dealer activity moved the status.
+    const activityReason = activityFollowUpReason(statusChange);
+    if (activityReason) parts.push(activityReason);
     // Unhappy 9: MG status is normalized to "Not Qualified" regardless of
     // the dealer's own wording (Junk Lead / Spam / etc.), so surface that
     // original wording here as the rejection reason — otherwise it would
@@ -503,7 +506,54 @@ function formatDealerActivityTime(value) {
   });
 }
 
-function DealerActivityList({ activities, loading }) {
+/* Activity-based Follow-up 1 / 2 (Dealer Studio): a dealer activity moved MG's status
+   from Not Contacted. The backend keeps the reason on the status change in the log's
+   field_changes: { trigger: "DEALER_ACTIVITY", activity_count, activities: [{ id, type, user, at }] }. */
+const ACTIVITY_TRIGGER = "DEALER_ACTIVITY";
+const ORDINALS = ["First", "Second"];
+
+function describeDealerActivity(activity) {
+  const who = activity?.user ? ` by ${activity.user}` : "";
+  return `${dealerActivityLabel(activity?.type)}${who}, ${formatDealerActivityTime(activity?.at)}`;
+}
+
+// "First dealer activity: Phone call by Sam Taylor, 25 Nov 2026, 11:39 am"; with two
+// (straight to Follow-up 2) both are named.
+function activityFollowUpReason(statusChange) {
+  if (statusChange?.trigger !== ACTIVITY_TRIGGER || !Array.isArray(statusChange.activities)) return null;
+  const list = statusChange.activities;
+  if (list.length === 0) return null;
+  if (list.length === 1) {
+    const ordinal = statusChange.to === "Follow-up 2" ? "Second" : "First";
+    return `${ordinal} dealer activity: ${describeDealerActivity(list[0])}`;
+  }
+  return list.map((activity, i) => `${ORDINALS[i] || "Next"} dealer activity: ${describeDealerActivity(activity)}`).join(" · ");
+}
+
+/**
+ * From the timeline (oldest first): which dealer activity triggered which follow-up,
+ * as { [activityId]: "Follow-up 1" | "Follow-up 2" }, and the activity change behind
+ * the lead's current status (null when the status was not set by an activity).
+ */
+function activityFollowUps(timeline, currentStatus) {
+  const byActivity = {};
+  let current = null;
+  (timeline || []).forEach((entry) => {
+    const change = parseFieldChanges(entry).find((c) => c.field === "lead_status");
+    if (change?.trigger !== ACTIVITY_TRIGGER || !Array.isArray(change.activities)) return;
+    const twoAtOnce = change.activities.length > 1;
+    change.activities.forEach((activity, i) => {
+      if (!activity?.id) return;
+      byActivity[activity.id] = twoAtOnce ? (i === 0 ? "Follow-up 1" : "Follow-up 2") : change.to;
+    });
+    current = change;
+  });
+  // The latest activity change counts only if it is still what MG shows.
+  if (current && current.to !== currentStatus) current = null;
+  return { byActivity, current };
+}
+
+function DealerActivityList({ activities, loading, followUps = {} }) {
   if (loading) {
     return (
       <li className="lead-detail__timeline-empty" aria-busy="true" style={{ listStyle: "none", padding: 0 }}>
@@ -524,6 +574,11 @@ function DealerActivityList({ activities, loading }) {
         <div className="lead-detail__timeline-title-row">
           <p className="lead-detail__timeline-title">{dealerActivityLabel(activity.event_type)}</p>
           {activity.user_name && <span className="lead-detail__timeline-badge lead-detail__timeline-badge--neutral">{activity.user_name}</span>}
+          {followUps[activity.id] && (
+            <span className="lead-detail__timeline-badge lead-detail__timeline-badge--followup" title="This activity moved MG's Enquiry Status">
+              Triggered {followUps[activity.id]}
+            </span>
+          )}
         </div>
         {activity.description && <p className="lead-detail__timeline-detail">{activity.description}</p>}
         <p className="lead-detail__timeline-time">{formatDealerActivityTime(activity.created_at)}</p>
@@ -1173,6 +1228,12 @@ export default function LeadDetailView({ lead, onBack, onLeadChanged }) {
 
   const journeyPaths = getDistinctPaths(timeline);
 
+  // Activity-based Follow-up 1 / 2: the reason under the status, and the activity badges.
+  const activityFollowUpInfo = activityFollowUps(timeline, lead.lead_status);
+  const statusReason = activityFollowUpInfo.current
+    ? `Set by dealer activity: ${describeDealerActivity(activityFollowUpInfo.current.activities.at(-1))}`
+    : null;
+
   // Only dealers whose CRM sends activities get the card, plus any lead that already has some.
   const showDealerActivity =
     dealerActivities.available &&
@@ -1241,6 +1302,7 @@ export default function LeadDetailView({ lead, onBack, onLeadChanged }) {
             <h1>{lead.customer_name || "Unnamed Customer"}</h1>
             {isRemoved ? <StatusPill status="Removed" /> : <StatusPill status={lead.lead_status} />}
           </div>
+          {!isRemoved && statusReason && <p className="lead-detail__status-reason">{statusReason}</p>}
 
           {/* All distinct scenarios this lead has been through, not just the current one */}
           <PathChips paths={journeyPaths.length > 0 ? journeyPaths : [path]} currentId={path.id} />
@@ -1430,7 +1492,11 @@ export default function LeadDetailView({ lead, onBack, onLeadChanged }) {
           </h3>
           <div className="lead-detail__timeline-scroll">
             <ul className="lead-detail__timeline">
-              <DealerActivityList activities={dealerActivities.activities} loading={dealerActivitiesLoading} />
+              <DealerActivityList
+                activities={dealerActivities.activities}
+                loading={dealerActivitiesLoading}
+                followUps={activityFollowUpInfo.byActivity}
+              />
             </ul>
           </div>
         </section>

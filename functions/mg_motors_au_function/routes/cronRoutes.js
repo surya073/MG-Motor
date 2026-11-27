@@ -13,6 +13,7 @@ const dealerReconciliationService = require('../services/integrations/dealerReco
 const { backfillOemReferences } = require('../services/integrations/oemReferenceBackfillService');
 const { backfillDealerStudioLostOutcome } = require('../services/integrations/lostOutcomeBackfillService');
 const { backfillTestDriveContacted } = require('../services/integrations/testDriveStatusBackfillService');
+const { backfillActivityFollowUps } = require('../services/integrations/activityFollowUpBackfillService');
 const { sendTestLead } = require('../services/integrations/testLeadService');
 const dailyErrorReportService = require('../services/integrations/dailyErrorReportService');
 const webhookEventRetention = require('../services/integrations/webhookEventRetention');
@@ -242,6 +243,37 @@ router.post('/cron/backfill-test-drive-contacted', async (req, res) => {
   } catch (err) {
     logger.error('cronRoutes', 'Test Drive -> Contacted backfill failed', err);
     res.status(502).json({ success: false, error: err.message });
+  }
+});
+
+// One-off, idempotent: Dealer Studio leads whose dealer already logged activities
+// but which MG still holds as Not Contacted (or Follow-up 1 with 2+ activities) move
+// to Follow-up 1 / 2 (live OEM status re-checked first; never a progressed status).
+// Goes through the inbound path, so the timeline shows the triggering activity.
+// Needs DEALER_STUDIO_ACTIVITY_FOLLOWUP on unless dryRun.
+// Body (optional): { dealerCodes, dryRun, limit (default 50, max 200; re-run for the rest) }.
+router.post('/cron/backfill-activity-follow-ups', async (req, res) => {
+  const providedSecret = req.headers['x-cron-secret'];
+  if (!providedSecret || providedSecret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+
+  try {
+    const catalystApp = usageContext.initialize(catalyst, req);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const result = await backfillActivityFollowUps(catalystApp, {
+      dealerCodes: body.dealerCodes,
+      dryRun: body.dryRun === true,
+      limit: body.limit,
+    });
+    logger.info('cronRoutes', 'Activity Follow-up backfill', {
+      dryRun: result.dryRun, candidates: result.candidates, updated: result.updated.length,
+      skipped: result.skipped.length, failed: result.failed.length, remaining: result.remaining,
+    });
+    res.status(200).json({ success: true, ...result });
+  } catch (err) {
+    logger.error('cronRoutes', 'Activity Follow-up backfill failed', err);
+    res.status(err.code === 'FEATURE_DISABLED' ? 409 : 502).json({ success: false, error: err.message });
   }
 });
 

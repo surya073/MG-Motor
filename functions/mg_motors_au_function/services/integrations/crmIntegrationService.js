@@ -20,8 +20,9 @@ const { classifyDealerError, isRetryableClass } = require('./dealerErrorClassifi
 const {
   getOutboundRetryConfig, isFusionInboundV2Enabled, isInboundEventStoreEnabled, isSlaDealerActionClockEnabled,
   isKeepOutboundRetryOnInboundEnabled, isDealerStudioNewLeadsOnly, isFusionSdNewLeadsOnly, isAutoPlayNewLeadsOnly,
-  isInboundStaleEventGuardEnabled, getFusionInboundEditFields,
+  isInboundStaleEventGuardEnabled, getFusionInboundEditFields, isDealerStudioActivityFollowUpEnabled,
 } = require('../../config/env');
+const dealerActivityFollowUp = require('./dealerActivityFollowUp');
 const integrationAuthService = require('./integrationAuthService');
 const { translateFusionWebhook } = require('./adapters/fusionSdInbound');
 const { TEST_DRIVE_AT } = require('./adapters/testDriveDate');
@@ -1230,7 +1231,7 @@ function testDriveDay(testDriveAt, now) {
   return mgToday(testDriveAt);
 }
 
-async function leadActivityDateFields(crmService, zohoLeadId, internalUpdate, now = new Date(), { testDriveAt = null } = {}) {
+async function leadActivityDateFields(crmService, zohoLeadId, internalUpdate, now = new Date(), { testDriveAt = null, firstActionAt = null } = {}) {
   const firstAction = isFirstActionUpdate(internalUpdate);
   const outcome = String(internalUpdate?.enquiry_outcome || '').trim().toLowerCase();
   const testDrive = outcome === 'test drive';
@@ -1241,7 +1242,9 @@ async function leadActivityDateFields(crmService, zohoLeadId, internalUpdate, no
     if (!record) return {};
     const today = mgToday(now);
     return {
-      ...(firstAction && !record.First_Action_Date ? { First_Action_Date: today } : {}),
+      // A dealer activity dates the first action by when it happened (testDriveDay's
+      // rules: a readable time not in the future), else the event day.
+      ...(firstAction && !record.First_Action_Date ? { First_Action_Date: testDriveDay(firstActionAt, now) || today } : {}),
       ...(testDrive && !record.Test_Drive_Date ? { Test_Drive_Date: testDriveDay(testDriveAt, now) || today } : {}),
       ...(closed && !record.Sold_Date ? { Sold_Date: today } : {}),
     };
@@ -2271,6 +2274,12 @@ async function processInboundWebhookForDealerStudio(catalystApp, integration, ex
       `Dealer Studio webhook for cluster ${translated.clusterId || 'unknown'} (dealer ${integration.dealer_code}): ${translated.skippedVehicle.join(' and ')} not in MG's list, not applied`
     );
   }
+  // Activity-based Follow-up 1 / 2: the post's activity list may move a waiting lead
+  // on even when it carries no status (dealerActivityFollowUp.js).
+  const activitySummary = isDealerStudioActivityFollowUpEnabled() && translated.hasLeadEvents
+    ? dealerActivityFollowUp.summarizeActivities(translated.leadEvents) : null;
+  const hasUpdate = translated.hasUpdate || activitySummary !== null;
+
   if (!translated.hasUpdate && !translated.hasLeadEvents) {
     logger.info(
       'crmIntegrationService',
@@ -2297,13 +2306,16 @@ async function processInboundWebhookForDealerStudio(catalystApp, integration, ex
     });
   }
 
-  if (!translated.hasUpdate) {
+  if (!hasUpdate) {
     logger.info(
       'crmIntegrationService',
       `Dealer Studio webhook for cluster ${translated.clusterId || 'unknown'} (dealer ${integration.dealer_code}) has no status, outcome or editable field; nothing to apply to MG`
     );
     return { ok: true, skipped: true, reason: 'NO_STATUS_IN_WEBHOOK' };
   }
+  // An activity-only post for a lead MG does not hold has nothing to act on: it is
+  // acknowledged, not held as an unknown lead.
+  if (targets.length === 0 && !translated.hasUpdate) return { ok: true, skipped: true, reason: 'NO_STATUS_IN_WEBHOOK' };
   if (targets.length === 0) targets = [candidates[0]];
 
   // A completed test drive is an inbound enquiry outcome. It needs a mapping
@@ -2316,7 +2328,11 @@ async function processInboundWebhookForDealerStudio(catalystApp, integration, ex
     // Dealer edits (name, contact, opt-in, model, variant) that have no row in the dealer's own map.
     ...translated.syntheticMappings,
   ];
-  const record = translated.lost ? { ...translated.record, [FUSION_LOST_DETAIL]: translated.lost } : translated.record;
+  const record = {
+    ...translated.record,
+    ...(translated.lost ? { [FUSION_LOST_DETAIL]: translated.lost } : {}),
+    ...(activitySummary ? { [dealerActivityFollowUp.ACTIVITY_FOLLOW_UP]: activitySummary } : {}),
+  };
 
   // A cluster can hold several leads (Dealer Studio groups leads that share a contact
   // detail) but carries ONE set of contact fields: the name, postcode, opt-in and car
@@ -3369,6 +3385,31 @@ async function attemptInboundLeadUpdateCore(
     }
   }
 
+  // Activity-based Follow-up 1 / 2 (Dealer Studio, MG approval 27 Nov 2026; rules in
+  // dealerActivityFollowUp.js). A status the dealer really set in this post (working,
+  // lost, invalid) or one the rules above set (a sale or a completed test drive moves a
+  // waiting lead to Contacted) wins. Otherwise the dealer's activities move a lead MG
+  // still has waiting to Follow-up 1 (first activity) or Follow-up 2 (second), and a
+  // Follow-up 1 lead to Follow-up 2. Forward only: Dealer Studio re-posting its
+  // unchanged "new" status never moves a Follow-up lead back to Not Contacted.
+  let activityTrigger = null;
+  if (dealerStudio && isDealerStudioActivityFollowUpEnabled()) {
+    const postStatus = isStatusSync ? mappedUpdate.lead_status : undefined;
+    const dealerSetStatus = postStatus !== undefined && !dealerActivityFollowUp.isWaitingStatus(postStatus);
+    const summary = externalRecord[dealerActivityFollowUp.ACTIVITY_FOLLOW_UP];
+    const target = !dealerSetStatus && summary
+      ? dealerActivityFollowUp.followUpTarget(existingLeadRow.lead_status, summary.count) : null;
+    if (target) {
+      mappedUpdate.lead_status = target;
+      isStatusSync = true;
+      activityTrigger = dealerActivityFollowUp.followUpTrigger(summary, existingLeadRow.lead_status, target);
+    } else if (!dealerSetStatus && postStatus !== undefined
+      && dealerActivityFollowUp.isActivityFollowUpStatus(existingLeadRow.lead_status)) {
+      delete mappedUpdate.lead_status;
+      isStatusSync = false;
+    }
+  }
+
   // Once Unhappy 10 has raised Unattended Alert, a repeated dealer
   // acknowledgement / Not Contacted snapshot is still "no action". Daily
   // reconciliation must not roll MG backwards to Not Contacted and erase the
@@ -3455,6 +3496,8 @@ async function attemptInboundLeadUpdateCore(
         raw_dealer_value: rawDealerStatus,
         dealer_changed_at: externalRecord.Modified_Time || externalRecord.modified_at || null,
         received_at: new Date().toISOString(),
+        // Why an activity moved the status (trigger, activity_count, activities[]).
+        ...(activityTrigger || {}),
       } : {}),
       ...(key === 'enquiry_outcome' && fusionDealerStatus ? {
         raw_dealer_value: fusionDealerStatus,
@@ -3544,6 +3587,9 @@ async function attemptInboundLeadUpdateCore(
     ...(await leadActivityDateFields(zohoCrmService, mapping.zoho_lead_id, internalUpdate, inboundEventTime(externalRecord) || new Date(), {
       // When the dealer's test drive actually happened, if the webhook said.
       testDriveAt: pathPolicy.parseTimestamp(externalRecord?.[TEST_DRIVE_AT]),
+      // An activity that moved the lead on: the First Action Date is its day.
+      firstActionAt: activityTrigger
+        ? pathPolicy.parseTimestamp(externalRecord[dealerActivityFollowUp.ACTIVITY_FOLLOW_UP]?.first?.at) : null,
     })),
     ...(internalUpdate.lead_status === 'Lost Lead' ? fusionLostReasonFields(externalRecord?.[FUSION_LOST_DETAIL]) : {}),
   };
@@ -4019,6 +4065,7 @@ module.exports = {
   getIntegrationsByDealerCode,
   getFieldMappings,
   getStatusMappings,
+  processResolvedInboundLead, // activityFollowUpBackfillService
   buildOutboundPayload,
   syncLeadToExternalCrm,
   isBeforeDealerStudioCutoff,

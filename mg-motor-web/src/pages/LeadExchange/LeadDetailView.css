@@ -1777,3 +1777,52 @@
     animation: none;
   }
 }
+
+/* =========================================================
+   TIMELINE — no sideways scroll
+   Long unbroken text in an activity (SMS text, links, reference numbers)
+   made the text column wider than the card, so the timeline scrolled
+   sideways. The text column may shrink, long words wrap, and the list only
+   ever scrolls vertically.
+   ========================================================= */
+
+.lead-detail__timeline-scroll {
+  overflow-x: hidden;
+}
+
+.lead-detail__timeline-item > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lead-detail__timeline-title-row {
+  min-width: 0;
+}
+
+.lead-detail__timeline-badge {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lead-detail__timeline-title,
+.lead-detail__timeline-detail {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.lead-detail__timeline-detail {
+  white-space: pre-line;
+}
+
+/* Activity-based Follow-up 1 / 2 (Dealer Studio): why the status moved */
+.lead-detail__status-reason {
+  margin: var(--space-1, 4px) 0 0;
+  font-size: var(--fs-sm, 13px);
+  color: var(--color-text-muted, #666);
+}
+
+.lead-detail__timeline-badge--followup {
+  background: var(--color-primary-soft, #e8f0fe);
+  color: var(--color-primary, #1a56db);
+}

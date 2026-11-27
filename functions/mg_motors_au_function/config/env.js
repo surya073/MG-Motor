@@ -578,6 +578,17 @@ function isAutoPlayNewLeadsOnly() {
 }
 
 /**
+ * DEALER_STUDIO_ACTIVITY_FOLLOWUP (default off): a Dealer Studio dealer's activities
+ * (calls, SMS, emails, notes) move a lead MG still has as Not Contacted to Follow-up 1
+ * on the first activity and Follow-up 2 on the second (see
+ * services/integrations/dealerActivityFollowUp.js). true | on | yes | 1 turns it on.
+ * Read on every call.
+ */
+function isDealerStudioActivityFollowUpEnabled() {
+  return ['true', 'on', 'yes', '1'].includes(String(process.env.DEALER_STUDIO_ACTIVITY_FOLLOWUP || '').trim().toLowerCase());
+}
+
+/**
  * PROJECT_TIMEZONE: the IANA timezone the Catalyst project (Console > Settings >
  * General) displays its system columns in (CREATEDTIME / MODIFIEDTIME). The code
  * reads those as wall-clock strings, so it must know the zone. Defaults to
@@ -599,6 +610,7 @@ function getProjectTimezone() {
 module.exports = {
   getProjectTimezone,
   isDealerStudioNewLeadsOnly,
+  isDealerStudioActivityFollowUpEnabled,
   isFusionSdNewLeadsOnly,
   isAutoPlayNewLeadsOnly,
   getZohoConfig,
